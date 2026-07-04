@@ -170,6 +170,14 @@ def _save_mesh(mesh, key: str) -> str:
     return f"/api/session-geometry/{fn}"
 
 
+def _stash_ar_mesh(s: dict, mesh, scalar: str, clim, cmap: str) -> None:
+    """Remember the most recent computed surface so GET /model.glb can serve it
+    for AR without re-running the (heavy) compute. Bumps a version so a stale GLB
+    byte-cache is discarded when parameters change."""
+    s["ar"] = {"mesh": mesh, "scalar": scalar, "clim": tuple(clim), "cmap": cmap}
+    s.pop("ar_glb", None)
+
+
 @router.post("/session/{sid}/analyze")
 def analyze(sid: str, req: AnalyzeReq) -> dict:
     s = SESSIONS.get(sid)
@@ -189,6 +197,9 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
     key = hashlib.sha256(
         f"{sid}|{req.side}|{req.region_label}|{json.dumps(req.params, sort_keys=True)}".encode()
     ).hexdigest()[:16]
+    _stash_ar_mesh(s, res["mesh"], "thickness_mm",
+                   (params.mode_a_range_min, params.mode_a_range_max),
+                   params.mode_a_colormap)
     return {
         "geometry_url": _save_mesh(res["mesh"], key),
         "scalar": "thickness_mm",
@@ -283,6 +294,106 @@ def pick_to_slices(sid: str, req: PickReq) -> dict:
             "world_xyz_mm": req.world_xyz_mm}
 
 
+# --------------------------------------------------------------------------- #
+# AR asset — binary glTF of the most-recently-computed surface (Phase V). A
+# phone's <model-viewer> GETs this URL directly (Scene Viewer / Quick Look). The
+# colour field is baked to per-vertex RGB so the map survives the format.
+# --------------------------------------------------------------------------- #
+@router.get("/session/{sid}/model.glb")
+def model_glb(sid: str) -> Response:
+    s = SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(404, "session not found")
+    ar = s.get("ar")
+    if not ar:
+        raise HTTPException(409, "no computed surface yet — run /analyze or /compare first")
+    glb = s.get("ar_glb")
+    if glb is None:
+        from core.export.mesh import export_mesh  # local: pulls trimesh only on demand
+        out = CACHE / f"{sid}_model.glb"
+        with R.COMPUTE_SEMAPHORE:  # decimate + write can be non-trivial on a big mesh
+            export_mesh(ar["mesh"], out, fmt="glb", scalar_name=ar["scalar"],
+                        cmap_name=ar["cmap"], clim=ar["clim"])
+        glb = out.read_bytes()
+        s["ar_glb"] = glb
+    return Response(content=glb, media_type="model/gltf-binary",
+                    headers={"Content-Disposition": 'inline; filename="bone.glb"',
+                             "Cache-Control": "private, max-age=300"})
+
+
+# --------------------------------------------------------------------------- #
+# Linked cross-sections (Phase IV): register two sides once, cache the world-map,
+# then map a crosshair on the reference volume to the matching slice on the target.
+# The linkage is *gated* on registration quality — a low inlier fraction (e.g. a
+# thorax-fused bone) is reported as unreliable rather than silently trusted.
+# --------------------------------------------------------------------------- #
+_MIN_RELIABLE_INLIER = 0.30
+
+
+class CompareSliceReq(BaseModel):
+    reference_side: str = "left"
+    target_side: str = "right"
+    world_xyz_mm: list[float]
+    params: dict = {}
+    manual_transform: list[list[float]] | None = None
+
+
+def _compare_map(s: dict, sid: str, req: "CompareSliceReq"):
+    """Return (cached) registration world-map for (reference_side, target_side)."""
+    ref = s["sides"].get(req.reference_side)
+    tgt = s["sides"].get(req.target_side)
+    if not ref or not tgt:
+        raise HTTPException(400, "unknown side(s)")
+    if ref.get("arr") is None or tgt.get("arr") is None:
+        raise HTTPException(400, "both sides must be volumes (not bare meshes)")
+    ckey = hashlib.sha256(
+        f"{req.reference_side}|{req.target_side}|{json.dumps(req.params, sort_keys=True)}"
+        f"|{req.manual_transform}".encode()
+    ).hexdigest()[:16]
+    cache = s.setdefault("compare_maps", OrderedDict())
+    reg = cache.get(ckey)
+    if reg is None:
+        params = _params(req.params)
+        with R.COMPUTE_SEMAPHORE:
+            reg = pipeline.compare_registration(ref, tgt, params,
+                                                manual_transform=req.manual_transform)
+        cache[ckey] = reg
+        while len(cache) > 4:            # a handful of param sets per session
+            cache.popitem(last=False)
+    return ref, tgt, reg
+
+
+def _side_slices(sd: dict, world_xyz) -> dict:
+    ijk = mpr.world_to_voxel(world_xyz, sd["spacing"], sd["offset_xyz"])
+    nz, ny, nx = sd["arr"].shape
+    in_bounds = 0 <= ijk[0] < nx and 0 <= ijk[1] < ny and 0 <= ijk[2] < nz
+    return {"world_xyz_mm": [round(float(w), 3) for w in world_xyz],
+            "voxel_ijk": list(ijk), "in_bounds": bool(in_bounds),
+            "slices": mpr.slices_from_voxel(ijk, sd["arr"].shape)}
+
+
+@router.post("/session/{sid}/compare-slice-map")
+def compare_slice_map(sid: str, req: CompareSliceReq) -> dict:
+    s = SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(404, "session not found")
+    ref, tgt, reg = _compare_map(s, sid, req)
+    tgt_world = pipeline.apply_affine(reg["ref_world_to_tgt_world"], req.world_xyz_mm)
+    reliable = reg["inlier_fraction"] >= _MIN_RELIABLE_INLIER
+    return {
+        "reference": _side_slices(ref, req.world_xyz_mm),
+        "target": _side_slices(tgt, tgt_world),
+        "registration": {
+            "rms_mm": round(reg["rms"], 3),
+            "inlier_fraction": round(reg["inlier_fraction"], 3),
+            "reliable": bool(reliable),
+            "note": ("registration is well-constrained" if reliable else
+                     "low overlap — the linked target slice is unreliable "
+                     "(isolate the bone / adjust registration first)"),
+        },
+    }
+
+
 @router.post("/session/{sid}/compare")
 def compare(sid: str, req: CompareReq) -> dict:
     s = SESSIONS.get(sid)
@@ -304,6 +415,10 @@ def compare(sid: str, req: CompareReq) -> dict:
     key = hashlib.sha256(
         f"{sid}|cmp|{req.reference_side}|{req.target_side}|{json.dumps(req.params, sort_keys=True)}".encode()
     ).hexdigest()[:16]
+    _stash_ar_mesh(s, res["mesh"], res["scalar"],
+                   (params.mode_b_center - params.mode_b_range_abs,
+                    params.mode_b_center + params.mode_b_range_abs),
+                   params.mode_b_colormap)
     return {
         "geometry_url": _save_mesh(res["mesh"], key),
         "scalar": res["scalar"],

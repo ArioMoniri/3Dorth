@@ -26,9 +26,11 @@ import {
   compare,
   exportResult,
   fetchRegionThumbnails,
+  pickToSlices,
 } from './api';
 import ControlPanel from './ControlPanel';
 import Viewport from './Viewport';
+import MPRViewer from './mpr/MPRViewer';
 import Legend from './Legend';
 import StatsPanel from './StatsPanel';
 import ShareSwitch from './ShareSwitch';
@@ -77,6 +79,16 @@ export default function App() {
 
   // Hover tooltip.
   const [hover, setHover] = useState(null);
+
+  // ---- MPR image viewer -----------------------------------------------------
+  // Center-area toggle between the 3D map and the linked MPR slices.
+  const [centerView, setCenterView] = useState('map'); // 'map' | 'images'
+  // A 3D-pick crosshair pushed into the MPR (voxel {ix,iy,iz}); bumped so the
+  // MPR adopts it even when the same voxel is picked twice.
+  const [pickedCrosshair, setPickedCrosshair] = useState(null);
+  // World point of the linked crosshair -> the 3D sphere marker. Set both by a
+  // 3D pick and by MPR scrubbing/clicking (voxel->world from volume-info).
+  const [marker, setMarker] = useState(null); // { x, y, z } | null
 
   // Compute state + last results.
   const [computing, setComputing] = useState(false);
@@ -311,6 +323,47 @@ export default function App() {
     setReferenceSide(targetSide);
     setTargetSide(referenceSide);
   }
+
+  // The side the MPR slices. A deviation view shows the reference side's volume
+  // (the frame the picks live in); otherwise the selected analyze side. A mesh
+  // upload has no volume to slice.
+  const mprSide = isMesh ? null : isDeviationView ? referenceSide : side;
+
+  // ---- 3D pick -> MPR crosshair --------------------------------------------
+  // Clicking the mesh surface hands us a world point; we POST pick-to-slices to
+  // convert it to voxel indices (the SAME arithmetic the trame path uses), push
+  // that crosshair into the MPR, place the 3D marker, and reveal the images.
+  const pickSeqRef = useRef(0);
+  async function onSurfacePick(worldXyz) {
+    if (!session || !mprSide) return;
+    // Show the marker immediately at the exact picked point (no round-trip lag).
+    setMarker({ x: worldXyz[0], y: worldXyz[1], z: worldXyz[2] });
+    try {
+      const res = await pickToSlices(session.session_id, {
+        side: mprSide,
+        worldXyz,
+      });
+      const ijk = res.voxel_ijk;
+      // Bump a sequence field so an identical voxel still triggers the MPR's
+      // adopt effect (which keys on ix/iy/iz).
+      pickSeqRef.current += 1;
+      setPickedCrosshair({
+        ix: ijk[0],
+        iy: ijk[1],
+        iz: ijk[2],
+        _seq: pickSeqRef.current,
+      });
+    } catch {
+      // Session may have been evicted; a subsequent compute re-opens one. The
+      // marker still shows the picked point, so the click isn't silently lost.
+    }
+  }
+
+  // MPR scrub/click -> move the 3D marker (voxel already converted to world by
+  // the MPR from volume-info, so no server round-trip).
+  const onMprCrosshair = (_vox, world) => {
+    setMarker({ x: world[0], y: world[1], z: world[2] });
+  };
 
   // Run whichever compute matches the current view, if its preconditions hold.
   // Deviation view -> compare (needs two distinct sides); otherwise -> analyze
@@ -687,11 +740,38 @@ export default function App() {
           canExport={Boolean(displayGeometry)}
         />
 
-        <main className="viewport-wrap">
+        <main className={`center${centerView === 'images' ? ' center-split' : ''}`}>
+          <div className="center-toolbar">
+            <div className="center-toggle" role="group" aria-label="Center view">
+              <button
+                className={centerView === 'map' ? 'active' : ''}
+                onClick={() => setCenterView('map')}
+              >
+                3D map
+              </button>
+              <button
+                className={centerView === 'images' ? 'active' : ''}
+                onClick={() => setCenterView('images')}
+                disabled={isMesh}
+                title={
+                  isMesh
+                    ? 'A mesh upload has no volume to slice'
+                    : 'Show the linked MPR slices beside the map'
+                }
+              >
+                Images (MPR)
+              </button>
+            </div>
+          </div>
+
+          <div className="center-body">
+        <div className="viewport-wrap">
           <Viewport
             geometry={displayGeometry}
             onHover={setHover}
             cameraPose={camera}
+            onPick={onSurfacePick}
+            marker={marker}
           />
 
           {displayGeometry && (
@@ -768,6 +848,29 @@ export default function App() {
             ) : (
               <StatsPanel kind="thickness" result={thicknessResult} />
             )}
+          </div>
+        </div>
+
+          {centerView === 'images' && (
+            <div className="mpr-column">
+              {mprSide ? (
+                <MPRViewer
+                  sessionId={session.session_id}
+                  side={mprSide}
+                  externalCrosshair={pickedCrosshair}
+                  onCrosshairChange={onMprCrosshair}
+                />
+              ) : (
+                <div className="mpr-wrap mpr-empty">
+                  <div className="mpr-empty-title">No volume to slice</div>
+                  <div className="mpr-empty-body">
+                    This session is a mesh upload — the MPR viewer needs a CT
+                    volume. Load a scan to see linked slices.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           </div>
         </main>
       </div>

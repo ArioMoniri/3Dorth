@@ -149,6 +149,51 @@ export function exportResult(
   return postJSON(`/api/session/${sessionId}/export`, body);
 }
 
+// ---- MPR image viewer (slice-on-demand) ----------------------------------
+// The volume never leaves the server: the browser only ever pulls small
+// windowed PNG slices + tiny geometry JSON. See docs/IMAGING_DESIGN.md.
+
+// GET /api/session/{sid}/volume-info?side=<side>
+//   -> { side, shape_zyx, spacing_mm, offset_xyz_mm, origin_mm, extent_mm,
+//        hu_range, default_window, default_level, planes, n_slices, orientation }
+// Geometry the MPR viewer needs to lay out planes and map the 3D crosshair.
+// Cheap, cacheable, no pixels. `side` is optional (defaults server-side to the
+// first side of the session).
+export function fetchVolumeInfo(sessionId, side) {
+  const q = side ? `?side=${encodeURIComponent(side)}` : '';
+  return getJSON(`/api/session/${sessionId}/volume-info${q}`);
+}
+
+// Build the URL for one windowed, aspect-correct PNG slice. Returned as a plain
+// string so it can drop straight into an <img src>. `index` is clamped
+// server-side (scrubbing past the end holds the last slice). All planes are
+// array-oriented (axial=fix z, coronal=fix y, sagittal=fix x).
+export function sliceUrl(
+  sessionId,
+  { side, plane, index, window, level, maxDim },
+) {
+  const p = new URLSearchParams();
+  p.set('plane', plane);
+  p.set('index', String(Math.round(index)));
+  if (side) p.set('side', side);
+  if (window != null) p.set('window', String(window));
+  if (level != null) p.set('level', String(level));
+  if (maxDim != null) p.set('max_dim', String(Math.round(maxDim)));
+  return `/api/session/${sessionId}/slice?${p.toString()}`;
+}
+
+// POST /api/session/{sid}/pick-to-slices { side, world_xyz_mm:[x,y,z] }
+//   -> { voxel_ijk:[ix,iy,iz], in_bounds, slices:{axial,coronal,sagittal},
+//        world_xyz_mm }
+// Maps a 3D world pick (from clicking the mesh) to the three slice indices, so
+// clicking the bone moves all three MPR crosshairs. Pure arithmetic on the
+// server; shared with the trame path so both frontends stay honest.
+export function pickToSlices(sessionId, { side, worldXyz }) {
+  const body = { world_xyz_mm: worldXyz };
+  if (side) body.side = side;
+  return postJSON(`/api/session/${sessionId}/pick-to-slices`, body);
+}
+
 // Geometry .vtp files are served at the geometry_url returned by analyze/compare.
 // Fetch as an ArrayBuffer so vtkXMLPolyDataReader.parseAsArrayBuffer can consume
 // it. geometryUrl already starts with /api/... so it flows through the proxy.

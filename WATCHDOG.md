@@ -66,9 +66,9 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 |---|---|---|
 | I Design | clinical + technical design docs; coherent RAM-bounded API contract | ✅ (IMAGING_DESIGN.md + _clinical/_technical; contract locked) |
 | II Slice backend | `/api/session/{sid}/slice` MPR PNG; world↔voxel map; memory bounded | ✅ `core/viz/slice.py` + volume-info/slice/pick-to-slices + LRU; 14 tests; live coronal slice on the demo = real CT |
-| III MPR viewer (both UIs) | 3 planes + 3D, movable crosshair, parity | ⬜ |
-| IV Compare | two registered MPR viewers, matched cross-section | ⬜ |
-| V AR MVP | valid GLB opens in native mobile AR | ⬜ |
+| III MPR viewer (both UIs) | 3 planes + 3D, movable crosshair, parity | ✅ React (npm build + browser drive: 3 CT panels, crosshair, W/L, 3D pick→slices) + trame (qa_trame_mpr.py byte-identical to core.viz.slice; parity 4/4; no regression) |
+| IV Compare | two registered MPR viewers, matched cross-section | 🟡 backend done — `/compare-slice-map` maps ref→tgt via cached registration, **gated on inlier ≥0.30** (thorax-fused bone reported unreliable, not trusted); 3 tests. UI (side-by-side compare) pending |
+| V AR MVP | valid GLB opens in native mobile AR | 🟡 backend done — `core/export/mesh.py` GLB (per-vertex colour bake, triangle cap 250k) + `GET /model.glb` (byte-cached); 4 tests round-trip GLB in trimesh. `<model-viewer>` button pending |
 | VI AR/WebXR | in-AR clipping-plane cross-section (device-gated) | ⬜ |
 - Honest scope: not a full OHIF embed (light vtk.js MPR + slice-on-demand); AR MVP via GLB/model-viewer; WebXR cross-section is device-limited and clearly caveated.
 

@@ -17,7 +17,7 @@ from core.export.figure import export_figure
 from core.export.mesh import export_mesh
 
 _RASTER = ("png", "tiff", "jpg")
-_MESH = ("stl", "ply", "obj", "vtp")
+_MESH = ("stl", "ply", "obj", "vtp", "glb")
 
 
 def export_bundle(
@@ -29,7 +29,8 @@ def export_bundle(
     """Export ``mesh`` (coloured by ``scalar_name``) to every format in ``formats``.
 
     Recognised formats: raster ``png`` / ``tiff`` / ``jpg``; meshes ``stl`` /
-    ``ply`` / ``obj`` / ``vtp``; and ``dicom`` (de-identified Secondary Capture).
+    ``ply`` / ``obj`` / ``vtp`` / ``glb`` (AR); and ``dicom`` (de-identified
+    Secondary Capture).
     Returns a dict mapping each requested format to the saved file path (str).
     """
     out_dir = Path(out_dir)

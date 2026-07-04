@@ -52,6 +52,7 @@ from trame.widgets import html  # noqa: E402
 from trame.widgets import vuetify3 as v3  # noqa: E402
 
 import core.parameters as P  # noqa: E402
+import core.viz.slice as mpr  # noqa: E402  (shared slice math — byte-identical to the API)
 from app_trame.controls import control_specs  # noqa: E402
 from app_trame.scene import build_deviation_scene, build_thickness_scene  # noqa: E402
 from core import pipeline  # noqa: E402
@@ -194,6 +195,9 @@ def _refresh_session_ui() -> None:
     state.region_thumbs_loading = False
     state.region_thumbs_msg = ""
     state.region_label = None
+    # Re-point the MPR viewer at the new session's active volume (or hide it for a
+    # bare-mesh session). Safe to call inside a `with state` block.
+    _mpr_reset_for_side()
 
 
 def _downloads_url(thumb: str | None) -> str | None:
@@ -364,6 +368,143 @@ state.manual_ry = 0.0
 state.manual_rz = 0.0
 state.manual_enabled = False
 
+# --- MPR (multiplanar reformat) viewer ----------------------------------- #
+# Three 2D slice images (axial/coronal/sagittal) beside the 3D view, rendered by
+# the SAME core.viz.slice functions the FastAPI /slice endpoint uses, so a slice
+# at (plane, index, window, level) is byte-identical across both frontends. A
+# shared crosshair {ix,iy,iz,window,level} lives in trame state; each plane has a
+# slider, and clicking the 3D surface drives the crosshair via world_to_voxel +
+# slices_from_voxel. Planes are ARRAY-ORIENTED (labeled as such); we never assert
+# radiological A/P/S/I.
+state.mpr_available = False       # true once a volume side is loaded
+state.mpr_side = ""               # which side the shown slices belong to
+state.mpr_ix = 0                  # crosshair voxel (ix,iy,iz) = (x,y,z) index
+state.mpr_iy = 0
+state.mpr_iz = 0
+state.mpr_window = mpr.BONE_WINDOW
+state.mpr_level = mpr.BONE_LEVEL
+state.mpr_n_axial = 1             # slice counts per plane (from volume-info)
+state.mpr_n_coronal = 1
+state.mpr_n_sagittal = 1
+state.mpr_idx_axial = 0           # active slice index per plane (clamped)
+state.mpr_idx_coronal = 0
+state.mpr_idx_sagittal = 0
+state.mpr_img_axial = ""          # data:image/png;base64,... for each plane
+state.mpr_img_coronal = ""
+state.mpr_img_sagittal = ""
+state.mpr_note = ("Research / de-identified — not for diagnostic use. Planes are "
+                  "array-oriented (no radiological A/P/S/I laterality).")
+
+# plane -> (crosshair-index state key, per-plane index state key, n-slices key)
+_MPR_PLANE_STATE = {
+    "axial": ("mpr_iz", "mpr_idx_axial", "mpr_n_axial"),
+    "coronal": ("mpr_iy", "mpr_idx_coronal", "mpr_n_coronal"),
+    "sagittal": ("mpr_ix", "mpr_idx_sagittal", "mpr_n_sagittal"),
+}
+
+
+def _mpr_active_side() -> dict | None:
+    """Return the volume-side dict feeding the MPR viewer (None for mesh/empty).
+
+    Uses the thickness side selector; falls back to the reference side (Mode B) or
+    the first volume side so the panels always show something for a volume scan.
+    """
+    if bool(SESSION.get("is_mesh")):
+        return None
+    with _LOCK:
+        sides = dict(SESSION["sides"])
+    for key in (state.side, state.ref_side, *sides.keys()):
+        sd = sides.get(key)
+        if sd is not None and sd.get("arr") is not None:
+            state.mpr_side = key
+            return sd
+    return None
+
+
+def _mpr_render_plane(side: dict, plane: str) -> str:
+    """Render one plane to a base64 data URI via the shared slice pipeline."""
+    import base64
+    idx_key = _MPR_PLANE_STATE[plane][1]
+    index = int(state[idx_key])
+    png = mpr.render_slice_png(
+        side["arr"], side["spacing"], plane, index,
+        window=float(state.mpr_window), level=float(state.mpr_level), max_dim=384,
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _mpr_refresh_images(*_a, **_k) -> None:
+    """Re-render all three slice PNGs from the current crosshair/window/level."""
+    side = _mpr_active_side()
+    if side is None:
+        with state:
+            state.mpr_available = False
+        state.flush()
+        return
+    with state:
+        state.mpr_available = True
+        state.mpr_img_axial = _mpr_render_plane(side, "axial")
+        state.mpr_img_coronal = _mpr_render_plane(side, "coronal")
+        state.mpr_img_sagittal = _mpr_render_plane(side, "sagittal")
+    state.flush()
+
+
+def _mpr_sync_from_voxel(ijk) -> None:
+    """Adopt a voxel (ix,iy,iz): set crosshair + per-plane slice indices (clamped),
+    exactly like the API's slices_from_voxel, then re-render the three panels."""
+    side = _mpr_active_side()
+    if side is None:
+        return
+    shape = side["arr"].shape  # (nz, ny, nx)
+    ix, iy, iz = (int(v) for v in ijk)
+    sl = mpr.slices_from_voxel((ix, iy, iz), shape)
+    with state:
+        state.mpr_ix = mpr.clamp_index(shape, "sagittal", ix)
+        state.mpr_iy = mpr.clamp_index(shape, "coronal", iy)
+        state.mpr_iz = mpr.clamp_index(shape, "axial", iz)
+        state.mpr_idx_axial = sl["axial"]
+        state.mpr_idx_coronal = sl["coronal"]
+        state.mpr_idx_sagittal = sl["sagittal"]
+    _mpr_refresh_images()
+
+
+def _mpr_reset_for_side(*_a, **_k) -> None:
+    """Reset MPR extents + crosshair to the center of the active volume side."""
+    side = _mpr_active_side()
+    if side is None:
+        with state:
+            state.mpr_available = False
+        state.flush()
+        return
+    info = mpr.volume_info(side["arr"], side["spacing"], side["offset_xyz"],
+                           side.get("side", state.mpr_side))
+    nz, ny, nx = info["shape_zyx"]
+    with state:
+        state.mpr_available = True
+        state.mpr_window = info["default_window"]
+        state.mpr_level = info["default_level"]
+        state.mpr_n_axial = info["n_slices"]["axial"]
+        state.mpr_n_coronal = info["n_slices"]["coronal"]
+        state.mpr_n_sagittal = info["n_slices"]["sagittal"]
+    _mpr_sync_from_voxel((nx // 2, ny // 2, nz // 2))
+
+
+def _mpr_on_plane_index_change(*_a, **_k) -> None:
+    """A plane slider moved: mirror it into the crosshair voxel and re-render.
+
+    axial idx -> iz, coronal idx -> iy, sagittal idx -> ix (per the fixed plane↔axis
+    map). Keeps the crosshair and the three panels in sync from either direction.
+    """
+    with state:
+        state.mpr_iz = int(state.mpr_idx_axial)
+        state.mpr_iy = int(state.mpr_idx_coronal)
+        state.mpr_ix = int(state.mpr_idx_sagittal)
+    _mpr_refresh_images()
+
+
+ctrl.mpr_refresh = _mpr_refresh_images
+ctrl.mpr_reset = _mpr_reset_for_side
+
 
 def _params_from_state() -> "P.Parameters":
     updates = {c["key"]: state[c["key"]] for c in control_specs()
@@ -481,8 +622,34 @@ def _on_hover(point, *_a, **_k):
     state.flush()
 
 
+def _on_pick_to_mpr(point, *_a, **_k):
+    """Left-click on the 3D surface -> drive the MPR crosshair.
+
+    Mirrors the API's /pick-to-slices: world (x,y,z) mm -> world_to_voxel (with the
+    active side's offset) -> slices_from_voxel -> the three 2D panels re-render at
+    the picked voxel. Off-surface clicks (point is None) are ignored.
+    """
+    if point is None:
+        return
+    side = _mpr_active_side()
+    if side is None:
+        return
+    try:
+        ijk = mpr.world_to_voxel(np.asarray(point, dtype=float), side["spacing"],
+                                 side["offset_xyz"])
+        _mpr_sync_from_voxel(ijk)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
 def _enable_hover() -> None:
-    """(Re)attach the hover-picking callback to the current plotter surface."""
+    """(Re)attach the hover-pick (tooltip) and left-click-pick (MPR crosshair)
+    callbacks to the current plotter surface.
+
+    Hover reads the scalar under the cursor (tooltip); a left click drives the MPR
+    crosshair via world_to_voxel + slices_from_voxel (byte-identical to the API's
+    pick-to-slices). Both are best-effort — the rest of the UI works without them.
+    """
     try:
         PLOTTER.disable_picking()
     except Exception:  # noqa: BLE001
@@ -494,6 +661,15 @@ def _enable_hover() -> None:
         )
     except Exception:  # noqa: BLE001
         # Hover picking is best-effort; the rest of the UI works without it.
+        pass
+    try:
+        # A separate surface-point pick on left click updates the MPR crosshair.
+        PLOTTER.enable_surface_point_picking(
+            callback=_on_pick_to_mpr, show_message=False, show_point=False,
+            left_clicking=True,
+        )
+    except Exception:  # noqa: BLE001
+        # Click-to-MPR is best-effort; sliders still drive the crosshair.
         pass
 
 
@@ -755,6 +931,16 @@ for _k in _RECOMPUTE_PARAM_KEYS + _RECOMPUTE_STATE_KEYS:
     state.change(_k)(schedule_recompute)
 for _k in _DISPLAY_ONLY_PARAM_KEYS:
     state.change(_k)(apply_display_only)
+
+# MPR reactivity: a plane slider moves -> mirror to crosshair + re-render;
+# window/level changes -> re-render all three panels. These are display-only for
+# the 2D panels and never touch the 3D pipeline (no recompute).
+for _k in ("mpr_idx_axial", "mpr_idx_coronal", "mpr_idx_sagittal"):
+    state.change(_k)(_mpr_on_plane_index_change)
+for _k in ("mpr_window", "mpr_level"):
+    state.change(_k)(_mpr_refresh_images)
+# Switching the thickness side re-points the MPR viewer at that volume.
+state.change("side")(_mpr_reset_for_side)
 
 
 # --------------------------------------------------------------------------- #
@@ -1219,16 +1405,86 @@ with SinglePageWithDrawerLayout(server) as layout:
     with layout.content:
         with v3.VContainer(fluid=True, classes="fill-height pa-0",
                            style="position:relative"):
-            view = plotter_ui(PLOTTER)
-            ctrl.view_update = view.update
-            # Hover tooltip overlay (top-right; never overlaps the drawer).
-            html.Div(
-                v_html=("hover_html",),
-                v_show="hover_active",
-                style="position:absolute;top:12px;right:12px;z-index:10;"
-                      "background:rgba(20,22,28,.92);color:#fff;padding:8px 12px;"
-                      "border-radius:8px;max-width:260px;pointer-events:none;"
-                      "box-shadow:0 2px 12px rgba(0,0,0,.35);line-height:1.4")
+            # Split the content: 3D view (flex) + MPR column (fixed, scrolls).
+            with html.Div(style="display:flex;flex-direction:row;width:100%;"
+                                 "height:100%;min-height:0"):
+                # ---- 3D view (left) --------------------------------------- #
+                with html.Div(style="position:relative;flex:1 1 auto;"
+                                     "min-width:0;height:100%"):
+                    view = plotter_ui(PLOTTER)
+                    ctrl.view_update = view.update
+                    # Hover tooltip overlay (top-right of the 3D pane).
+                    html.Div(
+                        v_html=("hover_html",),
+                        v_show="hover_active",
+                        style="position:absolute;top:12px;right:12px;z-index:10;"
+                              "background:rgba(20,22,28,.92);color:#fff;"
+                              "padding:8px 12px;border-radius:8px;max-width:260px;"
+                              "pointer-events:none;line-height:1.4;"
+                              "box-shadow:0 2px 12px rgba(0,0,0,.35)")
+
+                # ---- MPR column (right): 3 array-oriented slice panels ----- #
+                with html.Div(
+                    v_show="mpr_available",
+                    style="flex:0 0 360px;height:100%;overflow-y:auto;"
+                          "border-left:1px solid #e0e0e0;background:#0f1116;"
+                          "padding:10px 12px;box-sizing:border-box"):
+                    html.Div(
+                        "MPR — array-oriented slices",
+                        style="color:#e8e8e8;font-size:13px;font-weight:700;"
+                              "letter-spacing:.02em;margin-bottom:2px")
+                    html.Div(
+                        "Side: {{ mpr_side }} · voxel "
+                        "({{ mpr_ix }}, {{ mpr_iy }}, {{ mpr_iz }}) · "
+                        "click the 3D surface to move the crosshair",
+                        style="color:#9aa0aa;font-size:11px;margin-bottom:6px;"
+                              "line-height:1.4")
+                    html.Div(
+                        "{{ mpr_note }}",
+                        style="color:#c9a227;font-size:10px;margin-bottom:10px;"
+                              "line-height:1.4;border:1px solid #4a3f12;"
+                              "background:#1c1808;border-radius:6px;padding:5px 7px")
+
+                    # Window / level for the 2D panels (bone default).
+                    with html.Div(style="margin-bottom:8px"):
+                        v3.VSlider(
+                            v_model=("mpr_window",), label="Window (HU)",
+                            min=1, max=4000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+                        v3.VSlider(
+                            v_model=("mpr_level",), label="Level (HU)",
+                            min=-1000, max=2000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+
+                    # One panel per plane: label "(array orientation)", the slice
+                    # image, and a slider bound to that plane's slice index.
+                    def _mpr_panel(title, img_key, idx_key, n_key):
+                        with html.Div(style="margin-bottom:12px"):
+                            html.Div(
+                                title,
+                                style="color:#cfd3da;font-size:12px;"
+                                      "font-weight:600;margin-bottom:3px")
+                            html.Img(
+                                src=(img_key,),
+                                v_if=f"{img_key}",
+                                style="width:100%;height:auto;display:block;"
+                                      "background:#000;border:1px solid #2a2e36;"
+                                      "border-radius:5px;image-rendering:pixelated")
+                            v3.VSlider(
+                                v_model=(idx_key,), min=0,
+                                max=(f"{n_key} - 1",), step=1,
+                                thumb_label=True, density="compact",
+                                hide_details=True, color="cyan",
+                                classes="mt-1", style="color:#cfd3da")
+
+                    _mpr_panel("Axial (array orientation)", "mpr_img_axial",
+                               "mpr_idx_axial", "mpr_n_axial")
+                    _mpr_panel("Coronal (array orientation)", "mpr_img_coronal",
+                               "mpr_idx_coronal", "mpr_n_coronal")
+                    _mpr_panel("Sagittal (array orientation)", "mpr_img_sagittal",
+                               "mpr_idx_sagittal", "mpr_n_sagittal")
 
 
 # --------------------------------------------------------------------------- #

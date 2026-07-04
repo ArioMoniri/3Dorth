@@ -361,3 +361,48 @@ def compare_sides(ref, tgt, params, *, manual_transform=None) -> dict:
                          "manual_adjusted": manual_transform is not None},
         "scalar": "deviation_mm",
     }
+
+
+def compare_registration(ref, tgt, params, *, manual_transform=None) -> dict:
+    """Register ``tgt`` onto ``ref`` and return world-space point maps between the
+    two volumes (Phase IV: linked cross-sections).
+
+    This is the *geometric* correspondence only — it ignores ``mode_b_reference``
+    (which merely picks which surface Mode B colours) because a point's anatomical
+    match does not depend on the colouring choice. Returns two 4x4 affines:
+    ``ref_world_to_tgt_world`` and its inverse ``tgt_world_to_ref_world`` (both in
+    the app frame, world = idx*spacing + offset), plus the registration quality so
+    the caller can gate the linkage on ``inlier_fraction``.
+    """
+    from core.registration import mirror, register
+
+    ref_res = analyze_thickness(ref["arr"], ref["spacing"], params, offset_xyz=ref["offset_xyz"])
+    tgt_res = analyze_thickness(tgt["arr"], tgt["spacing"], params, offset_xyz=tgt["offset_xyz"])
+    ref_mesh, tgt_mesh = ref_res["mesh"], tgt_res["mesh"]
+
+    if params.mirror_sagittal:
+        c = float(np.asarray(tgt_mesh.points)[:, 0].mean())  # mirror() defaults to this centroid
+        moving = mirror(tgt_mesh, plane="x")
+        mx = np.array([[-1.0, 0, 0, 2.0 * c], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    else:
+        moving = tgt_mesh
+        mx = np.eye(4)
+
+    reg = register(moving, ref_mesh, voxel_size=params.reg_voxel_size, icp_iters=params.reg_icp_iters)
+    T = _compose_transforms(reg.transform, manual_transform)   # moving_world -> ref_world
+    ref_from_tgt = T @ mx                                       # tgt_world -> ref_world
+    tgt_from_ref = np.linalg.inv(ref_from_tgt)                  # ref_world -> tgt_world
+    return {
+        "transform": T.tolist(),
+        "ref_world_to_tgt_world": tgt_from_ref.tolist(),
+        "tgt_world_to_ref_world": ref_from_tgt.tolist(),
+        "rms": float(reg.rms),
+        "inlier_fraction": float(reg.inlier_fraction),
+    }
+
+
+def apply_affine(mat, xyz) -> tuple:
+    """Apply a 4x4 affine (nested list or array) to a single (x, y, z) world point."""
+    M = np.asarray(mat, dtype=np.float64).reshape(4, 4)
+    p = M[:3, :3] @ np.asarray(xyz, dtype=np.float64) + M[:3, 3]
+    return (float(p[0]), float(p[1]), float(p[2]))

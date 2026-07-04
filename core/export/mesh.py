@@ -1,4 +1,7 @@
-"""Multi-format mesh export (stl / ply / obj / vtp).
+"""Multi-format mesh export (stl / ply / obj / vtp / glb).
+
+``.glb`` is the AR-ready binary glTF for ``<model-viewer>`` (Android Scene Viewer /
+iOS Quick Look-adjacent) — triangulated, per-vertex colour baked in, triangle-capped.
 
 ``.vtp`` carries all point/cell scalars natively (best for round-tripping the
 thickness or deviation field). ``.ply`` and ``.obj`` are surface-exchange formats
@@ -18,7 +21,30 @@ import pyvista as pv
 
 from core.viz.colormap import get_cmap
 
-_MESH_FORMATS = ("stl", "ply", "obj", "vtp")
+_MESH_FORMATS = ("stl", "ply", "obj", "vtp", "glb")
+
+# Bound the AR asset so a pathological upload can't produce a huge phone download.
+_GLB_MAX_TRIS = 250_000
+
+
+def _export_glb(pd: "pv.PolyData", out_path: "Path", active, cmap_name, clim) -> "Path":
+    """Write a Draco-free GLB with per-vertex colour baked in (for <model-viewer>
+    AR). Triangulated + capped so the file stays phone-sized."""
+    import trimesh
+
+    pd = pd.triangulate()
+    n_tris = pd.faces.reshape(-1, 4).shape[0]
+    if n_tris > _GLB_MAX_TRIS:
+        pd = pd.decimate(1.0 - _GLB_MAX_TRIS / n_tris).triangulate()
+    faces = pd.faces.reshape(-1, 4)[:, 1:]
+    verts = np.asarray(pd.points)
+    vcolors = None
+    if active is not None and active in pd.point_data:
+        rgb = _scalar_to_rgb(pd, active, cmap_name, clim)
+        vcolors = np.concatenate([rgb, np.full((len(rgb), 1), 255, np.uint8)], axis=1)
+    tm = trimesh.Trimesh(vertices=verts, faces=faces, vertex_colors=vcolors, process=False)
+    tm.export(str(out_path), file_type="glb")
+    return out_path
 
 
 def _scalar_to_rgb(mesh: pv.PolyData, scalar_name: str, cmap_name: str = "green_yellow_red",
@@ -67,6 +93,9 @@ def export_mesh(mesh, out_path, *, fmt: str = "stl",
     if fmt == "vtp":
         pd.save(str(out_path))  # keeps all scalars
         return out_path
+
+    if fmt == "glb":
+        return _export_glb(pd, out_path, active, cmap_name, clim)
 
     if fmt == "ply":
         if active is not None and active in pd.point_data:

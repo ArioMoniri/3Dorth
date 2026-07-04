@@ -23,6 +23,7 @@ import vtkXMLPolyDataReader from '@kitware/vtk.js/IO/XML/XMLPolyDataReader';
 import vtkAxesActor from '@kitware/vtk.js/Rendering/Core/AxesActor';
 import vtkOrientationMarkerWidget from '@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget';
 import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
+import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
 
 import { fetchGeometryArrayBuffer } from './api';
 import { buildDiscreteLUT } from './colors';
@@ -81,11 +82,17 @@ function scalarAtPickedCell(polydata, scalarName, cellId, pos) {
 // cursor is over the surface, null when it leaves.
 // `cameraPose` — { azimuth, elevation, roll, zoom } applied to the reset camera
 // so the on-screen pose matches the Export panel's requested pose.
-export default function Viewport({ geometry, onHover, cameraPose }) {
+// `onPick(worldXyz)` — fires with the picked [x,y,z] world point when the user
+//   clicks the surface (used to drive the MPR crosshair via pick-to-slices).
+// `marker` — { x, y, z } world position for a small sphere marker (the linked
+//   crosshair point), or null to hide it.
+export default function Viewport({ geometry, onHover, cameraPose, onPick, marker }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
 
   // ---- one-time vtk.js setup ------------------------------------------------
   useEffect(() => {
@@ -140,7 +147,28 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
       mapper: null,
       polydata: null,
       lastUrl: null,
+      markerActor: null,
+      markerSource: null,
     };
+
+    // ---- linked-crosshair marker (a small red sphere) ----------------------
+    // Placed at the picked / crosshair world point so the 3D view shows exactly
+    // where the MPR planes intersect. Hidden until there is a marker.
+    const markerSource = vtkSphereSource.newInstance({
+      radius: 2.0,
+      thetaResolution: 16,
+      phiResolution: 16,
+    });
+    const markerMapper = vtkMapper.newInstance();
+    markerMapper.setInputConnection(markerSource.getOutputPort());
+    const markerActor = vtkActor.newInstance();
+    markerActor.setMapper(markerMapper);
+    markerActor.getProperty().setColor(0.95, 0.15, 0.15);
+    markerActor.getProperty().setAmbient(0.5);
+    markerActor.setVisibility(false);
+    renderer.addActor(markerActor);
+    contextRef.current.markerActor = markerActor;
+    contextRef.current.markerSource = markerSource;
 
     // ---- hover picking ------------------------------------------------------
     const el = containerRef.current;
@@ -183,6 +211,38 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
     el.addEventListener('mousemove', onMove);
     el.addEventListener('mouseleave', onLeave);
 
+    // ---- click picking (surface point -> MPR crosshair) --------------------
+    // We only treat it as a "pick" click when the pointer didn't move far
+    // between down and up, so orbiting the camera (a drag) never fires a pick.
+    let downX = 0;
+    let downY = 0;
+    let downT = 0;
+    const onDown = (e) => {
+      downX = e.clientX;
+      downY = e.clientY;
+      downT = Date.now();
+    };
+    const onUp = (e) => {
+      if (e.button !== 0) return;
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved > 5 || Date.now() - downT > 500) return; // a drag, not a click
+      const ctx = contextRef.current;
+      if (!ctx || !ctx.actor || !ctx.polydata) return;
+      const rect = el.getBoundingClientRect();
+      const size = ctx.apiRenderWindow.getSize();
+      const ratioX = rect.width ? size[0] / rect.width : 1;
+      const ratioY = rect.height ? size[1] / rect.height : 1;
+      const x = (e.clientX - rect.left) * ratioX;
+      const y = (rect.height - (e.clientY - rect.top)) * ratioY;
+      ctx.picker.pick([x, y, 0], ctx.renderer);
+      const actors = ctx.picker.getActors();
+      if (!actors || actors.length === 0 || ctx.picker.getCellId() < 0) return;
+      const pos = ctx.picker.getPickPosition();
+      onPickRef.current?.([pos[0], pos[1], pos[2]]);
+    };
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('mouseup', onUp);
+
     const onResize = () => genericRenderWindow.resize();
     window.addEventListener('resize', onResize);
     // A ResizeObserver catches container-only layout changes (panel toggles,
@@ -200,6 +260,8 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
       if (resizeObserver) resizeObserver.disconnect();
       el.removeEventListener('mousemove', onMove);
       el.removeEventListener('mouseleave', onLeave);
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('mouseup', onUp);
       orientationWidget.setEnabled(false);
       genericRenderWindow.delete();
       contextRef.current = null;
@@ -302,6 +364,25 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
     cameraPose?.roll,
     cameraPose?.zoom,
   ]);
+
+  // ---- move / show / hide the crosshair marker -----------------------------
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.markerActor) return;
+    if (marker && Number.isFinite(marker.x)) {
+      // Size the sphere relative to the current mesh so it reads on any scale.
+      if (ctx.polydata) {
+        const b = ctx.polydata.getBounds();
+        const diag = Math.hypot(b[1] - b[0], b[3] - b[2], b[5] - b[4]);
+        if (diag > 0) ctx.markerSource.setRadius(diag * 0.012);
+      }
+      ctx.markerActor.setPosition(marker.x, marker.y, marker.z);
+      ctx.markerActor.setVisibility(true);
+    } else {
+      ctx.markerActor.setVisibility(false);
+    }
+    ctx.renderWindow?.render();
+  }, [marker?.x, marker?.y, marker?.z]);
 
   return (
     <div
