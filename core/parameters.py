@@ -253,10 +253,35 @@ def registry_for_mode(mode: str) -> list[ParamSpec]:
     return [p for p in REGISTRY if p.mode == m or p.mode == Mode.BOTH]
 
 
+# Parameters that only affect DISPLAY (applied instantly, client-side: LUT,
+# legend, camera) and do NOT need a server recompute. Everything else changes the
+# analysis and triggers a (debounced) auto-recompute so edits reflect in realtime.
+DISPLAY_ONLY_KEYS: set[str] = {
+    "mode_a_colormap", "mode_a_colormap_reverse", "mode_a_range_min",
+    "mode_a_range_max", "mode_a_colorbar_steps",
+    "mode_b_colormap", "mode_b_center", "mode_b_range_abs", "mode_b_colorbar_steps",
+    "standardized_view",
+}
+
+
+def affects_compute(key: str) -> bool:
+    """True if changing this parameter requires re-running the pipeline."""
+    return key not in DISPLAY_ONLY_KEYS
+
+
 def control_dicts(mode: str | None = None) -> list[dict]:
-    """Registry as plain dicts for UI rendering / JSON transport to React."""
+    """Registry as plain dicts for UI rendering / JSON transport to React.
+
+    Each dict carries ``recompute``: True -> the UI auto-recomputes (debounced)
+    on change; False -> the change applies instantly client-side (coloring/view).
+    """
     items = REGISTRY if mode is None else registry_for_mode(mode)
-    return [p.model_dump(mode="json") for p in items]
+    out = []
+    for p in items:
+        d = p.model_dump(mode="json")
+        d["recompute"] = affects_compute(p.key)
+        out.append(d)
+    return out
 
 
 def _duplicate_keys() -> list[str]:
