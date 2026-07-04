@@ -42,7 +42,6 @@ def build_scene(plotter: pv.Plotter, manifest, regions, thickness, *,
     plotter.set_background("white")
 
     if show_thickness:
-        th = manifest["thickness"]
         plotter.add_mesh(
             thickness, scalars="thickness_mm",
             cmap=get_cmap(params.mode_a_colormap, params.mode_a_colormap_reverse),
@@ -51,8 +50,10 @@ def build_scene(plotter: pv.Plotter, manifest, regions, thickness, *,
             smooth_shading=True,
             scalar_bar_args=dict(
                 title="Cortical thickness (mm)", vertical=True,
-                position_x=0.86, position_y=0.08, height=0.82, width=0.07,
-                n_labels=params.mode_a_colorbar_steps, fmt="%.4f", color="black",
+                position_x=0.88, position_y=0.10, height=0.78, width=0.06,
+                n_labels=params.mode_a_colorbar_steps, fmt="%.2f",
+                title_font_size=20, label_font_size=16, color="black",
+                italic=False, bold=False, font_family="arial",
             ),
         )
     else:
