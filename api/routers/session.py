@@ -553,6 +553,7 @@ def compare(sid: str, req: CompareReq) -> dict:
         "steps": params.mode_b_colorbar_steps,
         "stats": res["stats"],
         "registration": res["registration"],
+        "hover_scalars": res.get("hover_scalars", [res["scalar"]]),
     }
 
 

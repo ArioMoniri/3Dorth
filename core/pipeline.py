@@ -355,11 +355,33 @@ def compare_sides(ref, tgt, params, *, manual_transform=None) -> dict:
     aligned = apply_transform(moving, transform)
     dev = signed_distance(ref_mesh, aligned, convention=params.signed_distance_sign)
     ref_mesh["deviation_mm"] = np.asarray(dev)
+
+    # Carry BOTH local-thickness fields on the reference surface so a hover can
+    # report the reference wall thickness, the contralateral (target) wall
+    # thickness at the *matching* point, and their difference — not just the signed
+    # surface deviation. The target thickness is sampled at each reference vertex by
+    # its nearest aligned-target vertex (the two surfaces are registered).
+    ref_th = np.asarray(ref_mesh.point_data.get("thickness_mm",
+                        np.full(ref_mesh.n_points, np.nan)), dtype=float)
+    ref_mesh["ref_thickness_mm"] = ref_th
+    tgt_at_ref = np.full(ref_mesh.n_points, np.nan)
+    try:
+        if "thickness_mm" in aligned.point_data and aligned.n_points:
+            from scipy.spatial import cKDTree
+            tree = cKDTree(np.asarray(aligned.points, dtype=float))
+            _, idx = tree.query(np.asarray(ref_mesh.points, dtype=float), k=1)
+            tgt_at_ref = np.asarray(aligned.point_data["thickness_mm"], dtype=float)[idx]
+    except Exception:  # noqa: BLE001 — hover extras are best-effort, never fatal
+        pass
+    ref_mesh["tgt_thickness_mm"] = tgt_at_ref
+    ref_mesh["thickness_diff_mm"] = ref_th - tgt_at_ref
     return {
         "mesh": ref_mesh, "stats": deviation_stats(np.asarray(dev)).model_dump(),
         "registration": {"rms": reg.rms, "inlier_fraction": reg.inlier_fraction,
                          "manual_adjusted": manual_transform is not None},
         "scalar": "deviation_mm",
+        "hover_scalars": ["deviation_mm", "ref_thickness_mm", "tgt_thickness_mm",
+                          "thickness_diff_mm"],
     }
 
 
