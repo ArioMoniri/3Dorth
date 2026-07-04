@@ -169,6 +169,11 @@ export default function App() {
   // Mode-B view / reference & target sides / mirror / manual-anchor transform.
   // When this string changes, an auto-recompute is scheduled (debounced). It is
   // intentionally independent of every display-only param.
+  const manualTransform = useMemo(
+    () => buildManualTransform(nudge),
+    [nudge],
+  );
+
   const computeSignature = useMemo(() => {
     const relevant = {};
     recomputeKeys.forEach((k) => {
@@ -205,11 +210,6 @@ export default function App() {
 
   // Is the current view a deviation view?
   const isDeviationView = (mode === 'B' && modeBView === 'deviation') || isMesh;
-
-  const manualTransform = useMemo(
-    () => buildManualTransform(nudge),
-    [nudge],
-  );
 
   // If the server dropped our session (it restarted / evicted our id), open a
   // fresh one and ADOPT it: its sides may differ from the old session's, so we

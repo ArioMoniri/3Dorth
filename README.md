@@ -21,16 +21,34 @@ the proximal humerus over the years? — but nothing in the tool is humerus-only
 
 ## What you get
 
+![3Dorth React UI — cortical thickness of a proximal humerus, with the side
+selector, export/pose panel, and live controls](docs/assets/ui_react_thickness.png)
+<sub>The React frontend on the bundled de-identified demo. The trame frontend
+exposes the identical feature set.</sub>
+
 | Mode A — cortical thickness | Mode B — left/right deviation |
 |---|---|
 | ![Thickness map](docs/assets/phase2_thickness.png) | ![Signed deviation map](docs/assets/qa_trame_rework_deviation.png) |
 | One scan. Green = thin wall, red = thick, in mm. | Two sides registered; red = bone gained, blue = lost. |
 
 - **Mode A** segments the bone from its CT density, computes wall thickness at
-  every surface point, and colours it with the paper's green→red scale. Point,
-  line, and height tools reproduce the source figures.
+  every surface point, and colours it with the paper's green→red scale.
 - **Mode B** rebuilds both bones, aligns them (with an optional left/right
   mirror), and reports a signed surface deviation with per-region statistics.
+
+Everything is interactive and applies in real time:
+
+- **Load** a DICOM `.zip`, NIfTI, or a surface mesh — or use the bundled
+  de-identified demo. A bilateral scan splits into Left/Right; pick a **region**
+  by its thumbnail.
+- **Every parameter applies automatically** — colour/range/steps re-colour
+  instantly, segmentation/thickness parameters re-run after a short pause (no
+  Apply click needed).
+- **Hover** the surface for the per-point value; **export** PNG/TIFF (with a DPI),
+  STL/PLY/OBJ/VTP, or DICOM with a camera pose; **Mode B** adds a manual-anchor
+  nudge and a reference/target swap.
+- **Share** a public link (a resilient Cloudflare tunnel that survives sleep/wake)
+  and **switch between the two UIs** from either one.
 
 ## Get it running
 
@@ -93,10 +111,9 @@ Both build their control panels from the same parameter list, so they always
 expose the same knobs (a test fails the build if they ever drift apart).
 
 <p align="center">
-  <img src="docs/assets/phase1_regions.png" alt="Region view in the React UI" width="49%">
-  <img src="docs/assets/qa_trame_rework.png" alt="Thickness map in the trame UI" width="49%">
+  <img src="docs/assets/ui_trame.png" alt="The trame frontend: thickness map, stats, and Share URL" width="100%">
 </p>
-<p align="center"><sub>Left: region view (React). Right: thickness map (trame). Same analysis, two viewers.</sub></p>
+<p align="center"><sub>The trame frontend on the demo — same features as React, rendered server-side. The Share URL (top) is a live Cloudflare link.</sub></p>
 
 <details>
 <summary><b>Using it, step by step</b></summary>
@@ -201,6 +218,23 @@ during compute.
 - Research use only — not a clinical diagnostic.
 
 </details>
+
+## Roadmap
+
+Reviewed and designed (`docs/IMAGING_DESIGN_clinical.md`,
+`docs/IMAGING_DESIGN_technical.md`), implementation in progress:
+
+- An in-panel **image viewer** — axial/coronal/sagittal slices beside the 3D map,
+  with a crosshair linking a point on the surface to the slices. Slices are
+  rendered on demand by the API, so the whole volume never goes to the browser.
+- **Compare** two series' matched cross-sections side by side, gated on
+  registration quality so it never implies a correspondence the fit can't support.
+- **AR** — export a GLB to view the bone on a phone (native AR), with a WebXR
+  cross-section prototype where the device supports it.
+
+Per the review: measurement stays on the source geometry (never on a reformatted
+slice), orientation and laterality are derived from the data or shown as
+unverified (never guessed), and AR is for education/consent, not measurement.
 
 ## Contributing, changelog, license
 

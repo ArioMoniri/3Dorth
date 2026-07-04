@@ -625,6 +625,12 @@ def _compute_worker(req_id: int | None = None):
         if ctrl.view_update:
             ctrl.view_update()
         state.flush()
+
+        # After the first thickness compute for the active side, lazily load the
+        # per-region preview thumbnails (cached per session/side). Skipped for
+        # the deviation view and mesh sessions inside the loader.
+        if wants_thickness:
+            load_region_thumbnails()
     except Exception as e:  # noqa: BLE001
         # Don't surface an error from a compute that has already been superseded.
         if req_id is not None and not _is_current(req_id):
@@ -850,6 +856,37 @@ def refresh_config(*_a, **_k):
 
 ctrl.refresh_config = refresh_config
 
+# Poll interval for the Share panel's live public-URL refresh (seconds). Mirrors
+# the React app's 6 s /api/config poll: when scripts/share.sh (re)starts a tunnel
+# after sleep/wake, the shown URL updates WITHOUT a page reload.
+CONFIG_POLL_S = 6.0
+_config_poll_stop = threading.Event()
+
+
+def _config_poll_loop() -> None:
+    """Background loop: re-read outputs/public_urls.json every CONFIG_POLL_S and
+    push any change to the Share panel state (so the URL refreshes live)."""
+    last = None
+    while not _config_poll_stop.wait(CONFIG_POLL_S):
+        try:
+            cfg = read_public_config()
+            sig = (cfg["public"], cfg["trame_url"], cfg["react_url"])
+            if sig != last:
+                last = sig
+                refresh_config()
+        except Exception:  # noqa: BLE001
+            # Transient read error (file mid-rewrite) — keep the last URL.
+            pass
+
+
+def start_config_poll() -> None:
+    """Start the live-config polling thread once."""
+    t = threading.Thread(target=_config_poll_loop, daemon=True)
+    t.start()
+
+
+ctrl.start_config_poll = start_config_poll
+
 
 # --------------------------------------------------------------------------- #
 # File upload: VFileInput yields a list of {name, content(bytes/base64), size}.
@@ -985,6 +1022,62 @@ with SinglePageWithDrawerLayout(server) as layout:
                 v3.VSelect(v_model=("tgt_side",), items=("side_options",),
                            label="Target side", density="compact",
                            hide_details=True, variant="outlined")
+
+            # ---- Region picker (visual thumbnails) ---------------------------
+            # Only meaningful for the thickness view of a volume side. Each region
+            # shows a small rendered preview + volume/boneness; clicking one
+            # selects it and recomputes. The text side-selector above still works.
+            with html.Div(
+                v_if="!is_mesh_session && !(mode === 'B' && b_view === 'deviation')",
+                classes="mt-3"):
+                v3.VCardSubtitle("Region (click a preview to select)",
+                                 classes="px-0 pb-1")
+                # Spinner while the previews render (~5-10 s).
+                with html.Div(v_if="region_thumbs_loading",
+                              classes="d-flex align-center",
+                              style="gap:8px;font-size:12px;color:#666;"
+                                    "margin:4px 0"):
+                    v3.VProgressCircular(indeterminate=True, size="18", width="2",
+                                         color="primary")
+                    html.Span("{{ region_thumbs_msg }}")
+                html.Div("{{ region_thumbs_msg }}",
+                         v_if="!region_thumbs_loading && region_thumbs.length === 0",
+                         style="font-size:11px;color:#888;margin:4px 0")
+                # One clickable card per region.
+                with html.Div(v_if="region_thumbs.length > 0",
+                              style="display:flex;flex-direction:column;gap:6px;"
+                                    "margin-top:4px"):
+                    with html.Template(v_for="r in region_thumbs", key="r.label"):
+                        with html.Div(
+                            click=(ctrl.select_region, "[r.label]"),
+                            classes="d-flex align-center",
+                            style=("gap:10px;padding:5px 7px;border:1px solid #ddd;"
+                                   "border-radius:7px;cursor:pointer;background:#fff"),
+                        ):
+                            # thumbnail image (or a placeholder chip if null)
+                            html.Img(
+                                v_if="r.thumb",
+                                src=("r.thumb",),
+                                style="width:64px;height:64px;object-fit:contain;"
+                                      "border:1px solid #eee;border-radius:5px;"
+                                      "flex:0 0 auto;background:#fff")
+                            html.Div(
+                                "no preview", v_if="!r.thumb",
+                                style="width:64px;height:64px;display:flex;"
+                                      "align-items:center;justify-content:center;"
+                                      "border:1px solid #eee;border-radius:5px;"
+                                      "flex:0 0 auto;font-size:10px;color:#999;"
+                                      "text-align:center")
+                            with html.Div(style="min-width:0"):
+                                html.Div(
+                                    "Region {{ r.label }}",
+                                    style="font-size:13px;font-weight:600;color:#222")
+                                html.Div(
+                                    "{{ r.volume_cm3.toFixed(1) }} cm³ · "
+                                    "bone {{ r.boneness.toFixed(2) }}",
+                                    style="font-size:11px;color:#1867c0;"
+                                          "font-variant-numeric:tabular-nums")
+
             # Changes now auto-recompute (debounced); this button is an OPTIONAL
             # manual "recompute now" — it is no longer required.
             v3.VBtn("Recompute now", block=True, color="primary",
@@ -1143,6 +1236,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 # --------------------------------------------------------------------------- #
 def _bootstrap():
     refresh_config()
+    start_config_poll()  # live Share-URL refresh (mirrors React's 6 s poll)
     if DEMO_ZIP is None:
         with state:
             state.status = "error"
