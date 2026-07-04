@@ -204,3 +204,34 @@ export async function fetchGeometryArrayBuffer(geometryUrl) {
   }
   return res.arrayBuffer();
 }
+
+// POST /api/session/{sid}/compare-slice-map
+//   body: { reference_side, target_side, world_xyz_mm, params?, manual_transform? }
+//   -> { reference:{world_xyz_mm,voxel_ijk,in_bounds,slices}, target:{...same...},
+//        registration:{ rms_mm, inlier_fraction, reliable, note } }
+// Linked cross-section lookup (Phase IV): maps a crosshair on the reference
+// volume to the matching slice on the target volume via the (server-cached)
+// registration. `reliable=false` means low overlap — the caller MUST surface
+// this (amber banner), never silently trust the returned target slice.
+export function compareSliceMap(
+  sessionId,
+  { referenceSide, targetSide, worldXyz, params, manualTransform },
+) {
+  const body = {
+    reference_side: referenceSide,
+    target_side: targetSide,
+    world_xyz_mm: worldXyz,
+    params: params || {},
+  };
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/compare-slice-map`, body);
+}
+
+// GET /api/session/{sid}/model.glb -> binary glTF URL of the most-recently-
+// computed surface (thickness or deviation), per-vertex colour baked in. 409
+// if nothing has been computed yet. Returned as a plain URL string (like
+// sliceUrl) so it can drop straight into a <model-viewer src="..."> — the
+// element itself performs the GET.
+export function modelGlbUrl(sessionId) {
+  return `/api/session/${sessionId}/model.glb`;
+}

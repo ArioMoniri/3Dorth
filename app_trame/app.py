@@ -198,6 +198,12 @@ def _refresh_session_ui() -> None:
     # Re-point the MPR viewer at the new session's active volume (or hide it for a
     # bare-mesh session). Safe to call inside a `with state` block.
     _mpr_reset_for_side()
+    # A fresh scan invalidates any cached compare-mode registration.
+    with _COMPARE_REG_LOCK:
+        _COMPARE_REG_CACHE.clear()
+    state.compare_available = (not is_mesh_sess) and bilateral
+    if state.compare_active:
+        _compare_reset()
 
 
 def _downloads_url(thumb: str | None) -> str | None:
@@ -359,6 +365,15 @@ state.export_busy = False
 state.export_msg = ""
 state.export_links = []          # [{fmt, url}]
 
+# --- Phase V: AR asset export (GLB) --------------------------------------- #
+state.ar_glb_busy = False
+state.ar_glb_url = ""            # /downloads/... link once written
+state.ar_glb_path = ""           # server-side outputs/ path (shown for honesty)
+state.ar_glb_msg = ""
+state.ar_glb_note = ("Opens in a phone's AR viewer (Android Scene Viewer / a "
+                     "desktop 3D viewer). iOS AR Quick Look needs a USDZ, which "
+                     "this app does not generate.")
+
 # --- Manual anchor (Mode B) ---------------------------------------------- #
 state.manual_tx = 0.0
 state.manual_ty = 0.0
@@ -394,6 +409,48 @@ state.mpr_img_coronal = ""
 state.mpr_img_sagittal = ""
 state.mpr_note = ("Research / de-identified — not for diagnostic use. Planes are "
                   "array-oriented (no radiological A/P/S/I laterality).")
+
+# --- Phase IV: linked compare cross-sections ------------------------------ #
+# A second, independent MPR-style pair (Reference volume / Target volume) shown
+# side by side when compare mode is on. Moving the crosshair on the REFERENCE
+# panels maps through the CACHED compare_registration 4x4
+# (ref_world_to_tgt_world) to a TARGET voxel via core.pipeline.apply_affine, then
+# core.viz.slice.world_to_voxel/slices_from_voxel render the target panels — the
+# same array-oriented, de-identified honesty rail as the Phase III MPR.
+state.compare_available = False       # true once two distinct volume sides exist
+state.compare_active = False          # user toggle: show the compare panels
+state.cmp_ref_side = ""               # side key currently backing the reference
+state.cmp_tgt_side = ""               # side key currently backing the target
+state.cmp_ix = 0                      # reference crosshair voxel (ix,iy,iz)
+state.cmp_iy = 0
+state.cmp_iz = 0
+state.cmp_window = mpr.BONE_WINDOW
+state.cmp_level = mpr.BONE_LEVEL
+state.cmp_n_axial = 1
+state.cmp_n_coronal = 1
+state.cmp_n_sagittal = 1
+state.cmp_idx_axial = 0
+state.cmp_idx_coronal = 0
+state.cmp_idx_sagittal = 0
+state.cmp_ref_img_axial = ""
+state.cmp_ref_img_coronal = ""
+state.cmp_ref_img_sagittal = ""
+state.cmp_tgt_img_axial = ""
+state.cmp_tgt_img_coronal = ""
+state.cmp_tgt_img_sagittal = ""
+state.cmp_tgt_ix = 0                  # matched target voxel (display only)
+state.cmp_tgt_iy = 0
+state.cmp_tgt_iz = 0
+state.cmp_tgt_in_bounds = True
+state.cmp_reliable = True             # inlier_fraction >= 0.30 (same gate as the API)
+state.cmp_rms = 0.0
+state.cmp_inlier_fraction = 0.0
+state.cmp_reg_note = ""
+state.cmp_msg = ""                    # status / error line for the compare panel
+state.cmp_busy = False
+state.cmp_note = ("Research / de-identified — not for diagnostic use. Planes are "
+                  "array-oriented (no radiological A/P/S/I laterality). The matched "
+                  "TARGET slice is a REGISTRATION ESTIMATE, not a direct measurement.")
 
 # plane -> (crosshair-index state key, per-plane index state key, n-slices key)
 _MPR_PLANE_STATE = {
@@ -504,6 +561,233 @@ def _mpr_on_plane_index_change(*_a, **_k) -> None:
 
 ctrl.mpr_refresh = _mpr_refresh_images
 ctrl.mpr_reset = _mpr_reset_for_side
+
+
+# --------------------------------------------------------------------------- #
+# Phase IV: linked compare cross-sections.
+#
+# Registers reference<->target ONCE per (reference_side, target_side, params)
+# and reuses the cached 4x4 affines while the crosshair moves — moving the
+# crosshair must NOT re-run ICP registration every time. Gated on
+# inlier_fraction >= 0.30 exactly like the API's compare-slice-map (never
+# silently trust a low-overlap match — e.g. thorax-fused bone).
+# --------------------------------------------------------------------------- #
+_CMP_MIN_RELIABLE_INLIER = 0.30
+# Cache key -> registration dict (transform, ref_world_to_tgt_world,
+# tgt_world_to_ref_world, rms, inlier_fraction). Kept small (a handful of
+# distinct (sides, params) combos per session), mirroring the API's cache.
+_COMPARE_REG_CACHE: dict[str, dict] = {}
+_COMPARE_REG_LOCK = threading.Lock()
+
+
+def _compare_cache_key(ref_side: str, tgt_side: str, params: "P.Parameters",
+                       manual: list | None) -> str:
+    import hashlib
+    sig = json.dumps(params.model_dump(), sort_keys=True, default=str)
+    return hashlib.sha256(
+        f"{ref_side}|{tgt_side}|{sig}|{manual}".encode()
+    ).hexdigest()[:16]
+
+
+def _compare_sides_available() -> tuple[str, str] | None:
+    """Pick two distinct volume sides for the compare view, or None if unavailable."""
+    with _LOCK:
+        if SESSION.get("is_mesh"):
+            return None
+        sides = {k: v for k, v in SESSION["sides"].items() if v.get("arr") is not None}
+    names = list(sides.keys())
+    if len(names) < 2:
+        return None
+    ref = state.ref_side if state.ref_side in sides else names[0]
+    tgt = state.tgt_side if (state.tgt_side in sides and state.tgt_side != ref) else (
+        next((n for n in names if n != ref), names[0]))
+    return ref, tgt
+
+
+def _get_compare_registration(ref_side: str, tgt_side: str) -> dict:
+    """Return the CACHED compare_registration result, computing it only on a
+    cache miss (registers once, reuses the 4x4 while the crosshair moves)."""
+    params = _params_from_state()
+    manual = _manual_transform_matrix()
+    key = _compare_cache_key(ref_side, tgt_side, params, manual)
+    with _COMPARE_REG_LOCK:
+        cached = _COMPARE_REG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    with _LOCK:
+        ref = SESSION["sides"][ref_side]
+        tgt = SESSION["sides"][tgt_side]
+    reg = pipeline.compare_registration(ref, tgt, params, manual_transform=manual)
+    with _COMPARE_REG_LOCK:
+        _COMPARE_REG_CACHE[key] = reg
+        while len(_COMPARE_REG_CACHE) > 8:
+            _COMPARE_REG_CACHE.pop(next(iter(_COMPARE_REG_CACHE)))
+    return reg
+
+
+def _compare_render_plane(side: dict, plane: str, idx: int, window: float, level: float) -> str:
+    import base64
+    png = mpr.render_slice_png(side["arr"], side["spacing"], plane, idx,
+                               window=window, level=level, max_dim=384)
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _compare_sync_from_ref_voxel(ijk, *, reg: dict | None = None) -> None:
+    """Adopt a REFERENCE voxel: render the ref panels, map through the cached
+    registration to a TARGET voxel via apply_affine, then render the target
+    panels at the matched (clamped) voxel. Surfaces the reliable/amber gate."""
+    picked = _compare_sides_available()
+    if picked is None:
+        return
+    ref_side, tgt_side = picked
+    with _LOCK:
+        ref = SESSION["sides"][ref_side]
+        tgt = SESSION["sides"][tgt_side]
+
+    ref_shape = ref["arr"].shape  # (nz, ny, nx)
+    ix, iy, iz = (int(v) for v in ijk)
+    ref_sl = mpr.slices_from_voxel((ix, iy, iz), ref_shape)
+    ref_ix = mpr.clamp_index(ref_shape, "sagittal", ix)
+    ref_iy = mpr.clamp_index(ref_shape, "coronal", iy)
+    ref_iz = mpr.clamp_index(ref_shape, "axial", iz)
+
+    if reg is None:
+        reg = _get_compare_registration(ref_side, tgt_side)
+    ref_world = mpr.voxel_to_world((ref_ix, ref_iy, ref_iz), ref["spacing"], ref["offset_xyz"])
+    tgt_world = pipeline.apply_affine(reg["ref_world_to_tgt_world"], ref_world)
+    tgt_ijk = mpr.world_to_voxel(tgt_world, tgt["spacing"], tgt["offset_xyz"])
+    tgt_shape = tgt["arr"].shape
+    tix, tiy, tiz = (int(v) for v in tgt_ijk)
+    tgt_in_bounds = (0 <= tix < tgt_shape[2] and 0 <= tiy < tgt_shape[1] and 0 <= tiz < tgt_shape[0])
+    tgt_sl = mpr.slices_from_voxel((tix, tiy, tiz), tgt_shape)
+
+    reliable = reg["inlier_fraction"] >= _CMP_MIN_RELIABLE_INLIER
+    note = ("registration is well-constrained" if reliable else
+            "low overlap — the linked target slice is unreliable "
+            "(isolate the bone / adjust registration first)")
+
+    window, level = float(state.cmp_window), float(state.cmp_level)
+    with state:
+        state.cmp_ref_side, state.cmp_tgt_side = ref_side, tgt_side
+        state.cmp_ix, state.cmp_iy, state.cmp_iz = ref_ix, ref_iy, ref_iz
+        state.cmp_idx_axial = ref_sl["axial"]
+        state.cmp_idx_coronal = ref_sl["coronal"]
+        state.cmp_idx_sagittal = ref_sl["sagittal"]
+        state.cmp_n_axial = mpr.n_slices(ref_shape, "axial")
+        state.cmp_n_coronal = mpr.n_slices(ref_shape, "coronal")
+        state.cmp_n_sagittal = mpr.n_slices(ref_shape, "sagittal")
+        state.cmp_tgt_ix, state.cmp_tgt_iy, state.cmp_tgt_iz = tix, tiy, tiz
+        state.cmp_tgt_in_bounds = tgt_in_bounds
+        state.cmp_rms = round(float(reg["rms"]), 3)
+        state.cmp_inlier_fraction = round(float(reg["inlier_fraction"]), 3)
+        state.cmp_reliable = bool(reliable)
+        state.cmp_reg_note = note
+        state.cmp_ref_img_axial = _compare_render_plane(ref, "axial", ref_sl["axial"], window, level)
+        state.cmp_ref_img_coronal = _compare_render_plane(ref, "coronal", ref_sl["coronal"], window, level)
+        state.cmp_ref_img_sagittal = _compare_render_plane(ref, "sagittal", ref_sl["sagittal"], window, level)
+        state.cmp_tgt_img_axial = _compare_render_plane(tgt, "axial", tgt_sl["axial"], window, level)
+        state.cmp_tgt_img_coronal = _compare_render_plane(tgt, "coronal", tgt_sl["coronal"], window, level)
+        state.cmp_tgt_img_sagittal = _compare_render_plane(tgt, "sagittal", tgt_sl["sagittal"], window, level)
+    state.flush()
+
+
+def _compare_reset(*_a, **_k) -> None:
+    """(Re)compute availability + registration for the current ref/tgt pair and
+    center the reference crosshair, exactly like _mpr_reset_for_side."""
+    picked = _compare_sides_available()
+    with state:
+        state.compare_available = picked is not None
+    state.flush()
+    if picked is None:
+        with state:
+            state.cmp_msg = "Compare needs two distinct loaded volume sides."
+        state.flush()
+        return
+    ref_side, tgt_side = picked
+
+    def _job():
+        with state:
+            state.cmp_busy = True
+            state.cmp_msg = "Registering reference <-> target… (cached after first run)"
+        state.flush()
+        try:
+            reg = _get_compare_registration(ref_side, tgt_side)
+            with _LOCK:
+                ref = SESSION["sides"][ref_side]
+            nz, ny, nx = ref["arr"].shape
+            _compare_sync_from_ref_voxel((nx // 2, ny // 2, nz // 2), reg=reg)
+            with state:
+                state.cmp_busy = False
+                state.cmp_msg = ""
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            with state:
+                state.cmp_busy = False
+                state.cmp_msg = f"Compare registration failed: {e}"
+            state.flush()
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
+def _compare_on_plane_index_change(*_a, **_k) -> None:
+    """A compare-panel plane slider moved: mirror into the ref crosshair voxel,
+    re-map to target, and re-render both sides (reuses the cached registration)."""
+    if not state.compare_available:
+        return
+    ijk = (int(state.cmp_idx_sagittal), int(state.cmp_idx_coronal), int(state.cmp_idx_axial))
+    _compare_sync_from_ref_voxel(ijk)
+
+
+def _compare_refresh_window_level(*_a, **_k) -> None:
+    """Window/level changed: re-render both panel sets at the current indices
+    without touching the registration or crosshair."""
+    if not state.compare_available:
+        return
+    ijk = (int(state.cmp_ix), int(state.cmp_iy), int(state.cmp_iz))
+    _compare_sync_from_ref_voxel(ijk)
+
+
+def _on_pick_to_compare(point) -> None:
+    """Left-click on the 3D REFERENCE surface (compare mode) -> drive the
+    reference crosshair and re-map to the target side, mirroring _on_pick_to_mpr."""
+    if point is None or not state.compare_active:
+        return
+    picked = _compare_sides_available()
+    if picked is None:
+        return
+    ref_side, _tgt_side = picked
+    with _LOCK:
+        ref = SESSION["sides"][ref_side]
+    try:
+        ijk = mpr.world_to_voxel(np.asarray(point, dtype=float), ref["spacing"], ref["offset_xyz"])
+        _compare_sync_from_ref_voxel(ijk)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+def toggle_compare(*_a, **_k) -> None:
+    """User toggled compare mode on: (re)compute availability + registration."""
+    if state.compare_active:
+        _compare_reset()
+
+
+def _compare_on_ref_tgt_change(*_a, **_k) -> None:
+    """A ref/tgt swap invalidates the cached registration pairing shown in the
+    compare panel — only matters while compare mode is active."""
+    if state.compare_active:
+        _compare_reset()
+
+
+ctrl.compare_reset = _compare_reset
+ctrl.toggle_compare = toggle_compare
+
+for _k in ("cmp_idx_axial", "cmp_idx_coronal", "cmp_idx_sagittal"):
+    state.change(_k)(_compare_on_plane_index_change)
+for _k in ("cmp_window", "cmp_level"):
+    state.change(_k)(_compare_refresh_window_level)
+state.change("compare_active")(toggle_compare)
+for _k in ("ref_side", "tgt_side"):
+    state.change(_k)(_compare_on_ref_tgt_change)
 
 
 def _params_from_state() -> "P.Parameters":
@@ -623,13 +907,17 @@ def _on_hover(point, *_a, **_k):
 
 
 def _on_pick_to_mpr(point, *_a, **_k):
-    """Left-click on the 3D surface -> drive the MPR crosshair.
+    """Left-click on the 3D surface -> drive the MPR crosshair (and, when compare
+    mode is active, the linked compare crosshair too).
 
     Mirrors the API's /pick-to-slices: world (x,y,z) mm -> world_to_voxel (with the
     active side's offset) -> slices_from_voxel -> the three 2D panels re-render at
     the picked voxel. Off-surface clicks (point is None) are ignored.
     """
     if point is None:
+        return
+    if state.compare_active:
+        _on_pick_to_compare(point)
         return
     side = _mpr_active_side()
     if side is None:
@@ -1027,6 +1315,70 @@ ctrl.do_export = do_export
 
 
 # --------------------------------------------------------------------------- #
+# Phase V: AR asset export (GLB).
+#
+# Exports the CURRENTLY DISPLAYED surface (Mode A thickness, or Mode B
+# deviation) via core.export.mesh.export_mesh(..., fmt='glb') with the active
+# colormap/clim baked into per-vertex colour, and serves it from /downloads so
+# a real download link works from the running UI. GLB opens directly in a
+# phone's AR viewer (Android Scene Viewer / a desktop 3D viewer); genuine iOS AR
+# Quick Look needs a USDZ, which this app does NOT generate — the caption says
+# so rather than overclaiming.
+# --------------------------------------------------------------------------- #
+def _ar_glb_worker():
+    try:
+        diverging = state.mode == "B" and state.b_view == "deviation"
+        mesh = _LAST_MESH["deviation"] if diverging else _LAST_MESH["thickness"]
+        if mesh is None:
+            raise RuntimeError("Nothing computed yet — run a compute first.")
+        params = _params_from_state()
+        if diverging:
+            scalar = "deviation_mm"
+            cmap_name = "blue_white_red"
+            center, span = params.mode_b_center, params.mode_b_range_abs
+            clim = (center - span, center + span)
+        else:
+            scalar = "thickness_mm"
+            cmap_name = params.mode_a_colormap
+            clim = (params.mode_a_range_min, params.mode_a_range_max)
+
+        key = uuid.uuid4().hex[:12]
+        out_dir = EXPORTS_DIR / "ar" / key
+        out_path = out_dir / "model.glb"
+        from core.export.mesh import export_mesh
+        export_mesh(mesh, out_path, fmt="glb", scalar_name=scalar,
+                    cmap_name=cmap_name, clim=clim)
+        url = f"/downloads/ar/{key}/model.glb"
+        with state:
+            state.ar_glb_busy = False
+            state.ar_glb_url = url
+            state.ar_glb_path = str(out_path)
+            state.ar_glb_msg = f"GLB ready ({out_path.stat().st_size:,} bytes)."
+        state.flush()
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        with state:
+            state.ar_glb_busy = False
+            state.ar_glb_url = ""
+            state.ar_glb_msg = f"GLB export failed: {e}"
+        state.flush()
+
+
+def do_export_ar_glb(*_a, **_k):
+    if state.ar_glb_busy:
+        return
+    with state:
+        state.ar_glb_busy = True
+        state.ar_glb_msg = "Exporting GLB…"
+        state.ar_glb_url = ""
+    state.flush()
+    threading.Thread(target=_ar_glb_worker, daemon=True).start()
+
+
+ctrl.do_export_ar_glb = do_export_ar_glb
+
+
+# --------------------------------------------------------------------------- #
 # Share / switcher actions.
 # --------------------------------------------------------------------------- #
 def refresh_config(*_a, **_k):
@@ -1155,6 +1507,10 @@ with SinglePageWithDrawerLayout(server) as layout:
                            mandatory=True, variant="outlined", divided=True):
             v3.VBtn("A", value="A", disabled=("is_mesh_session",))
             v3.VBtn("B", value="B")
+        v3.VSwitch(
+            v_model=("compare_active",), label="Compare (linked cross-sections)",
+            density="compact", hide_details=True, color="primary",
+            disabled=("!compare_available",), style="margin-left:16px;flex:none")
         v3.VSpacer()
         # Share URL (copyable) + switch-to-the-other-UI.
         v3.VTextField(
@@ -1402,6 +1758,34 @@ with SinglePageWithDrawerLayout(server) as layout:
                                       "font-size:12px;text-decoration:none;"
                                       "text-transform:uppercase;font-weight:600")
 
+                    v3.VDivider(classes="my-3")
+
+                    # ---- Phase V: AR asset export (GLB) ----------------------
+                    v3.VCardSubtitle("AR asset (GLB)", classes="px-0 pb-1")
+                    html.Div(
+                        "Exports the CURRENTLY DISPLAYED surface (colormap/range "
+                        "baked in as per-vertex colour) as a triangle-capped GLB.",
+                        style="font-size:11px;color:#666;margin-bottom:6px;line-height:1.4")
+                    v3.VBtn("Download GLB for AR", block=True, color="primary",
+                            variant="tonal", prepend_icon="mdi-cube-scan",
+                            click=ctrl.do_export_ar_glb,
+                            loading=("ar_glb_busy",), disabled=("ar_glb_busy",))
+                    v3.VAlert(text=("ar_glb_msg",), v_if="ar_glb_msg",
+                              density="compact", variant="tonal",
+                              type=("ar_glb_msg.startsWith('GLB export failed') ? "
+                                    "'error' : 'success'",),
+                              classes="mt-2", style="font-size:12px")
+                    html.A(
+                        "Download model.glb",
+                        v_if="ar_glb_url", href=("ar_glb_url",), download=True,
+                        target="_blank",
+                        style="display:inline-block;margin-top:6px;padding:5px 12px;"
+                              "background:#1867c0;color:#fff;border-radius:4px;"
+                              "font-size:12px;text-decoration:none;font-weight:600")
+                    html.Div(
+                        "{{ ar_glb_note }}",
+                        style="font-size:10px;color:#888;margin-top:6px;line-height:1.4")
+
     with layout.content:
         with v3.VContainer(fluid=True, classes="fill-height pa-0",
                            style="position:relative"):
@@ -1425,7 +1809,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 
                 # ---- MPR column (right): 3 array-oriented slice panels ----- #
                 with html.Div(
-                    v_show="mpr_available",
+                    v_show="mpr_available && !compare_active",
                     style="flex:0 0 360px;height:100%;overflow-y:auto;"
                           "border-left:1px solid #e0e0e0;background:#0f1116;"
                           "padding:10px 12px;box-sizing:border-box"):
@@ -1485,6 +1869,146 @@ with SinglePageWithDrawerLayout(server) as layout:
                                "mpr_idx_coronal", "mpr_n_coronal")
                     _mpr_panel("Sagittal (array orientation)", "mpr_img_sagittal",
                                "mpr_idx_sagittal", "mpr_n_sagittal")
+
+                # ---- Compare column (right): Phase IV linked cross-sections - #
+                # Reference volume / Target volume panels side by side, driven by
+                # the SAME crosshair math as the Phase III MPR, mapped through the
+                # cached compare_registration 4x4. Shown INSTEAD of the plain MPR
+                # column while compare mode is active (same real estate).
+                with html.Div(
+                    v_show="compare_active",
+                    style="flex:0 0 640px;height:100%;overflow-y:auto;"
+                          "border-left:1px solid #e0e0e0;background:#0f1116;"
+                          "padding:10px 12px;box-sizing:border-box"):
+                    html.Div(
+                        "Compare — linked cross-sections",
+                        style="color:#e8e8e8;font-size:13px;font-weight:700;"
+                              "letter-spacing:.02em;margin-bottom:2px")
+                    html.Div(
+                        "click the 3D REFERENCE surface to move the crosshair "
+                        "(target panels follow via the cached registration)",
+                        style="color:#9aa0aa;font-size:11px;margin-bottom:6px;"
+                              "line-height:1.4")
+                    html.Div(
+                        "{{ cmp_note }}",
+                        style="color:#c9a227;font-size:10px;margin-bottom:8px;"
+                              "line-height:1.4;border:1px solid #4a3f12;"
+                              "background:#1c1808;border-radius:6px;padding:5px 7px")
+
+                    # Busy / error line.
+                    html.Div("{{ cmp_msg }}", v_if="cmp_msg",
+                              style="color:#9aa0aa;font-size:11px;margin-bottom:8px")
+
+                    # Reliability banner: green (reliable) vs amber (low overlap) —
+                    # the SAME gate as the API (inlier_fraction >= 0.30). Never
+                    # hidden when unreliable; the matched target slice is shown
+                    # regardless, just flagged as not trustworthy.
+                    with html.Div(
+                        v_if="compare_available && cmp_reliable",
+                        style="border-radius:6px;padding:6px 9px;margin-bottom:10px;"
+                              "font-size:11px;line-height:1.4;background:#123219;"
+                              "border:1px solid #1e5c2e;color:#8fe3a3"):
+                        html.Div("Registration reliable",
+                                 style="font-weight:700;margin-bottom:2px")
+                        html.Div(
+                            "RMS {{ cmp_rms }} mm · inlier fraction "
+                            "{{ cmp_inlier_fraction }} · {{ cmp_reg_note }}")
+                    with html.Div(
+                        v_if="compare_available && !cmp_reliable",
+                        style="border-radius:6px;padding:6px 9px;margin-bottom:10px;"
+                              "font-size:11px;line-height:1.4;background:#332405;"
+                              "border:1px solid #7a5a10;color:#f0c96b"):
+                        html.Div("Registration UNRELIABLE — target slice not trustworthy",
+                                 style="font-weight:700;margin-bottom:2px")
+                        html.Div(
+                            "RMS {{ cmp_rms }} mm · inlier fraction "
+                            "{{ cmp_inlier_fraction }} (< 0.30) · {{ cmp_reg_note }}")
+                    html.Div(
+                        "Compare needs two distinct loaded volume sides.",
+                        v_if="!compare_available",
+                        style="color:#c77;font-size:11px;margin-bottom:10px")
+
+                    # Window / level shared by both sides' panels.
+                    with html.Div(style="margin-bottom:8px"):
+                        v3.VSlider(
+                            v_model=("cmp_window",), label="Window (HU)",
+                            min=1, max=4000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+                        v3.VSlider(
+                            v_model=("cmp_level",), label="Level (HU)",
+                            min=-1000, max=2000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+
+                    # Two-column layout: Reference volume | Target volume.
+                    with html.Div(style="display:flex;flex-direction:row;gap:10px"):
+                        with html.Div(style="flex:1 1 0;min-width:0"):
+                            html.Div(
+                                "Reference volume ({{ cmp_ref_side }})",
+                                style="color:#cfd3da;font-size:12px;font-weight:700;"
+                                      "margin-bottom:4px")
+                            html.Div(
+                                "voxel ({{ cmp_ix }}, {{ cmp_iy }}, {{ cmp_iz }})",
+                                style="color:#7d838c;font-size:10px;margin-bottom:4px")
+
+                            def _cmp_ref_panel(title, img_key, idx_key, n_key):
+                                with html.Div(style="margin-bottom:10px"):
+                                    html.Div(title,
+                                             style="color:#cfd3da;font-size:11px;"
+                                                   "font-weight:600;margin-bottom:2px")
+                                    html.Img(
+                                        src=(img_key,), v_if=f"{img_key}",
+                                        style="width:100%;height:auto;display:block;"
+                                              "background:#000;border:1px solid #2a2e36;"
+                                              "border-radius:5px;image-rendering:pixelated")
+                                    v3.VSlider(
+                                        v_model=(idx_key,), min=0,
+                                        max=(f"{n_key} - 1",), step=1,
+                                        thumb_label=True, density="compact",
+                                        hide_details=True, color="cyan",
+                                        classes="mt-1", style="color:#cfd3da")
+
+                            _cmp_ref_panel("Axial (array orientation)",
+                                          "cmp_ref_img_axial", "cmp_idx_axial", "cmp_n_axial")
+                            _cmp_ref_panel("Coronal (array orientation)",
+                                          "cmp_ref_img_coronal", "cmp_idx_coronal", "cmp_n_coronal")
+                            _cmp_ref_panel("Sagittal (array orientation)",
+                                          "cmp_ref_img_sagittal", "cmp_idx_sagittal", "cmp_n_sagittal")
+
+                        with html.Div(style="flex:1 1 0;min-width:0"):
+                            html.Div(
+                                "Target volume ({{ cmp_tgt_side }})",
+                                style="color:#cfd3da;font-size:12px;font-weight:700;"
+                                      "margin-bottom:4px")
+                            html.Div(
+                                "matched voxel ({{ cmp_tgt_ix }}, {{ cmp_tgt_iy }}, "
+                                "{{ cmp_tgt_iz }})",
+                                v_if="cmp_tgt_in_bounds",
+                                style="color:#7d838c;font-size:10px;margin-bottom:4px")
+                            html.Div(
+                                "matched voxel ({{ cmp_tgt_ix }}, {{ cmp_tgt_iy }}, "
+                                "{{ cmp_tgt_iz }}) — OUT OF BOUNDS",
+                                v_if="!cmp_tgt_in_bounds",
+                                style="color:#e08b8b;font-size:10px;margin-bottom:4px")
+
+                            # Static (non-interactive) images: this side FOLLOWS the
+                            # reference crosshair — it is not independently draggable.
+                            def _cmp_tgt_panel(title, img_key):
+                                with html.Div(style="margin-bottom:10px"):
+                                    html.Div(title,
+                                             style="color:#cfd3da;font-size:11px;"
+                                                   "font-weight:600;margin-bottom:2px")
+                                    html.Img(
+                                        src=(img_key,), v_if=f"{img_key}",
+                                        style="width:100%;height:auto;display:block;"
+                                              "background:#000;border:1px solid #2a2e36;"
+                                              "border-radius:5px;image-rendering:pixelated;"
+                                              "opacity:{{ cmp_reliable ? 1 : 0.55 }}")
+
+                            _cmp_tgt_panel("Axial (array orientation)", "cmp_tgt_img_axial")
+                            _cmp_tgt_panel("Coronal (array orientation)", "cmp_tgt_img_coronal")
+                            _cmp_tgt_panel("Sagittal (array orientation)", "cmp_tgt_img_sagittal")
 
 
 # --------------------------------------------------------------------------- #

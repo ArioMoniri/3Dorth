@@ -31,6 +31,8 @@ import {
 import ControlPanel from './ControlPanel';
 import Viewport from './Viewport';
 import MPRViewer from './mpr/MPRViewer';
+import CompareView from './CompareView';
+import ArModal from './ArModal';
 import Legend from './Legend';
 import StatsPanel from './StatsPanel';
 import ShareSwitch from './ShareSwitch';
@@ -81,8 +83,11 @@ export default function App() {
   const [hover, setHover] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
-  // Center-area toggle between the 3D map and the linked MPR slices.
-  const [centerView, setCenterView] = useState('map'); // 'map' | 'images'
+  // Center-area toggle between the 3D map, the linked MPR slices, and the
+  // linked compare cross-sections (Phase IV).
+  const [centerView, setCenterView] = useState('map'); // 'map' | 'images' | 'compare'
+  // AR / 3D modal (Phase V).
+  const [arOpen, setArOpen] = useState(false);
   // A 3D-pick crosshair pushed into the MPR (voxel {ix,iy,iz}); bumped so the
   // MPR adopts it even when the same voxel is picked twice.
   const [pickedCrosshair, setPickedCrosshair] = useState(null);
@@ -128,6 +133,12 @@ export default function App() {
 
   const isMesh = Boolean(session?.is_mesh) || session?.sides?.[0] === 'mesh';
   const isSingleSided = session?.sides?.length === 1 && !isMesh;
+  // Phase IV compare view needs TWO real volume sides (left+right), not a mesh.
+  const canCompareSides =
+    !isMesh &&
+    Boolean(session?.is_bilateral) &&
+    (session?.sides || []).includes('left') &&
+    (session?.sides || []).includes('right');
 
   function applySession(sess) {
     setSession(sess);
@@ -740,7 +751,11 @@ export default function App() {
           canExport={Boolean(displayGeometry)}
         />
 
-        <main className={`center${centerView === 'images' ? ' center-split' : ''}`}>
+        <main
+          className={`center${centerView === 'images' ? ' center-split' : ''}${
+            centerView === 'compare' ? ' center-compare' : ''
+          }`}
+        >
           <div className="center-toolbar">
             <div className="center-toggle" role="group" aria-label="Center view">
               <button
@@ -761,10 +776,55 @@ export default function App() {
               >
                 Images (MPR)
               </button>
+              <button
+                className={centerView === 'compare' ? 'active' : ''}
+                onClick={() => setCenterView('compare')}
+                disabled={!canCompareSides}
+                title={
+                  canCompareSides
+                    ? 'Linked cross-sections between the reference and target volumes'
+                    : 'Needs a bilateral session with both left and right volumes'
+                }
+              >
+                Compare
+              </button>
             </div>
+            <button
+              type="button"
+              className="ar-launch-btn"
+              onClick={() => setArOpen(true)}
+              disabled={!displayGeometry}
+              title={
+                displayGeometry
+                  ? 'View the computed surface in 3D / AR'
+                  : 'Compute a thickness or deviation map first'
+              }
+            >
+              View in AR
+            </button>
           </div>
 
           <div className="center-body">
+        {centerView === 'compare' ? (
+          canCompareSides ? (
+            <CompareView
+              sessionId={session.session_id}
+              referenceSide={referenceSide}
+              targetSide={targetSide}
+              params={values}
+              manualTransform={manualTransform}
+            />
+          ) : (
+            <div className="mpr-wrap mpr-empty">
+              <div className="mpr-empty-title">Compare needs two volumes</div>
+              <div className="mpr-empty-body">
+                This session does not expose both a left and a right volume —
+                the linked compare view needs a bilateral scan.
+              </div>
+            </div>
+          )
+        ) : (
+          <>
         <div className="viewport-wrap">
           <Viewport
             geometry={displayGeometry}
@@ -871,8 +931,14 @@ export default function App() {
               )}
             </div>
           )}
+          </>
+        )}
           </div>
         </main>
+
+        {arOpen && (
+          <ArModal sessionId={session.session_id} onClose={() => setArOpen(false)} />
+        )}
       </div>
     </div>
   );
