@@ -41,8 +41,20 @@ _PATIENT_DEMO = next((ROOT / "Bilateral Omuz BT Jul 4 2026").glob("*.zip"), None
     (ROOT / "Bilateral Omuz BT Jul 4 2026").exists() else None
 _DEMO = _DEIDENTIFIED_DEMO if _DEIDENTIFIED_DEMO.exists() else _PATIENT_DEMO
 
-# In-memory sessions: sid -> {arr, spacing, meta, sides}
-SESSIONS: dict[str, dict] = {}
+# In-memory sessions: sid -> {arr, spacing, meta, sides}. An OrderedDict so we can
+# evict the least-recently-USED (not merely oldest-created) — every access touches
+# the session, so a scan a user is actively viewing is never the eviction victim.
+SESSIONS: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _get_session(sid: str) -> dict:
+    """Fetch a session and mark it most-recently-used, or 404 if it was evicted."""
+    s = SESSIONS.get(sid)
+    if s is None:
+        raise HTTPException(404, "session not found or expired — reload to start a "
+                                 "fresh session (create one via POST /api/session)")
+    SESSIONS.move_to_end(sid)
+    return s
 
 
 class LoadReq(BaseModel):
@@ -180,9 +192,7 @@ def _stash_ar_mesh(s: dict, mesh, scalar: str, clim, cmap: str) -> None:
 
 @router.post("/session/{sid}/analyze")
 def analyze(sid: str, req: AnalyzeReq) -> dict:
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found (create one via POST /api/session)")
+    s = _get_session(sid)
     side = s["sides"].get(req.side)
     if not side:
         raise HTTPException(400, f"unknown side '{req.side}'")
@@ -216,9 +226,7 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
 @router.get("/session/{sid}/region-thumbnails")
 def region_thumbnails(sid: str, side: str) -> dict:
     """Small per-bone-region renders for the region dropdown (visual selection)."""
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     sd = s["sides"].get(side)
     if not sd:
         raise HTTPException(400, f"unknown side '{side}'")
@@ -242,9 +250,7 @@ _OBLIQUE_LRU_MAX = 64
 
 
 def _volume_side(sid: str, side: str):
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     sd = s["sides"].get(side) if side else next(iter(s["sides"].values()), None)
     if not sd:
         raise HTTPException(400, f"unknown side '{side}'")
@@ -351,9 +357,7 @@ def oblique_slice(sid: str, req: ObliqueReq) -> dict:
 # --------------------------------------------------------------------------- #
 @router.get("/session/{sid}/model.glb")
 def model_glb(sid: str) -> Response:
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     ar = s.get("ar")
     if not ar:
         raise HTTPException(409, "no computed surface yet — run /analyze or /compare first")
@@ -440,9 +444,7 @@ def _side_slices(sd: dict, world_xyz) -> dict:
 
 @router.post("/session/{sid}/compare-slice-map")
 def compare_slice_map(sid: str, req: CompareSliceReq) -> dict:
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     ref, tgt, reg = _compare_map(s, req.reference_side, req.target_side,
                                  req.params, req.manual_transform)
     tgt_world = pipeline.apply_affine(reg["ref_world_to_tgt_world"], req.world_xyz_mm)
@@ -487,9 +489,7 @@ def _oblique_of(sd: dict, origin, normal, req: "ObliqueCompareReq") -> dict:
 
 @router.post("/session/{sid}/oblique-compare")
 def oblique_compare(sid: str, req: ObliqueCompareReq) -> dict:
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     if len(req.origin_xyz_mm) != 3 or len(req.normal) != 3:
         raise HTTPException(422, "origin_xyz_mm and normal must be length-3")
     ref, tgt, reg = _compare_map(s, req.reference_side, req.target_side,
@@ -510,9 +510,7 @@ def oblique_compare(sid: str, req: ObliqueCompareReq) -> dict:
 
 @router.post("/session/{sid}/compare")
 def compare(sid: str, req: CompareReq) -> dict:
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found")
+    s = _get_session(sid)
     ref = s["sides"].get(req.reference_side)
     tgt = s["sides"].get(req.target_side)
     if not ref or not tgt:
@@ -579,9 +577,7 @@ def export(sid: str, req: ExportReq) -> dict:
     ``/api/exports`` static mount. Supported formats: png, tiff, jpg, stl, ply,
     obj, vtp, dicom.
     """
-    s = SESSIONS.get(sid)
-    if not s:
-        raise HTTPException(404, "session not found (create one via POST /api/session)")
+    s = _get_session(sid)
     if req.mode.upper() not in ("A", "B"):
         raise HTTPException(422, "mode must be 'A' or 'B'")
     if not req.formats:
