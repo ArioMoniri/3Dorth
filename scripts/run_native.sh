@@ -23,13 +23,18 @@ ISSUES=""
 note_issue() { ISSUES="${ISSUES}\n  ${RED}•${RST} $*"; }
 retry() { local n="$1"; shift; local i=1; until "$@"; do [ "$i" -ge "$n" ] && return 1; warn "retry $i/$n: $*"; sleep $((i*2)); i=$((i+1)); done; }
 
-WITH_TRAME=1; STRICT=1
+_kill_running() {
+  pkill -f "uvicorn api.main:app" 2>/dev/null; pkill -f "app_trame.app" 2>/dev/null
+  pkill -f "cloudflared tunnel" 2>/dev/null; pkill -f "scripts/share.sh" 2>/dev/null; sleep 1
+}
+
+WITH_TRAME=1; STRICT=1; RESTART=0
 for a in "$@"; do case "$a" in
   --no-trame) WITH_TRAME=0 ;;
   --expose)   STRICT=0 ;;
+  --restart)  RESTART=1 ;;   # stop what's running, then bring it back up (installs reused)
   --down)
-    pkill -f "uvicorn api.main:app" 2>/dev/null; pkill -f "app_trame.app" 2>/dev/null
-    pkill -f "cloudflared tunnel" 2>/dev/null; pkill -f "scripts/share.sh" 2>/dev/null
+    _kill_running
     ok "stopped native 3Dorth (installs kept — use --uninstall to remove them)."; exit 0 ;;
   --uninstall)
     banner; step "Uninstalling native 3Dorth (local artefacts + tracked apt packages)…"
@@ -50,6 +55,7 @@ esac; done
 BIND=127.0.0.1; [ "$STRICT" = 0 ] && BIND=0.0.0.0
 mkdir -p "$TOOLS" outputs data/raw
 banner
+[ "$RESTART" = 1 ] && { step "Restart: stopping the running instance…"; _kill_running; ok "stopped; bringing it back up (installs reused)"; }
 
 # ---- 1. system libs (only the unavoidable GL/Xvfb; only-missing; tracked) --
 step "System libraries (only what VTK/pyvista need; tracked for clean removal)…"
@@ -122,9 +128,12 @@ fi
 [ -x "$TOOLS/node/bin/node" ] && export PATH="$TOOLS/node/bin:$PATH"
 if have node && [ -f app_react/package.json ]; then
   step "Building the React UI (log: outputs/react-build.log)…"
-  # vite can OOM on tiny boxes; raise the Node heap. Full log kept for diagnosis.
+  # --legacy-peer-deps avoids ERESOLVE peer conflicts (three / model-viewer vs React);
+  # raise the Node heap for vite; keep the full log for diagnosis.
   if ( cd app_react && export NODE_OPTIONS="--max-old-space-size=4096"
-       retry 2 npm ci --no-audit --no-fund && npm run build ) > outputs/react-build.log 2>&1; then
+       { retry 2 npm ci --no-audit --no-fund --legacy-peer-deps \
+         || retry 2 npm install --no-audit --no-fund --legacy-peer-deps; } \
+       && npm run build ) > outputs/react-build.log 2>&1; then
     export THREEDORTH_STATIC_DIR="$(pwd)/app_react/dist"; ok "UI built — the API serves it on one port"
   else
     warn "React build failed (see outputs/react-build.log) — serving API/docs only"

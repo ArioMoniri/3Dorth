@@ -5,7 +5,8 @@
 FROM node:20-slim AS build
 WORKDIR /app
 COPY app_react/package.json app_react/package-lock.json ./
-RUN npm ci
+# --legacy-peer-deps avoids ERESOLVE peer conflicts (three / @google/model-viewer vs React)
+RUN npm ci --legacy-peer-deps
 COPY app_react/ ./
 RUN npm run build
 
