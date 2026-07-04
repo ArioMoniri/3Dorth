@@ -70,3 +70,11 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 - **Phase 5 UIs** 🟡 both frontends reworked to compute-on-demand (side selector, Apply/Recompute, Mode B thickness+deviation, upload); parity maintained (controls from registry). Final build/run verification pending.
 - **Phase 6 deploy** ✅ Dockerfiles + compose profiles + `deploy.sh` one-liner + README/LICENSE. Backend image builds (linux/amd64; open3d has no arm64 wheel). Full compose up + reproducibility re-run: pending final verification.
 - Total tests: 80+ pass; watchdog GREEN on the built surface.
+
+## FINAL STATUS — all phases complete
+- **Phases 0–6 done.** 129 tests pass; watchdog GREEN (registry, config round-trip, no-PHI, de-identify, parity, pytest).
+- **Interactive app, both UIs:** compute-on-demand (every parameter applies), side selector, Mode A thickness + Mode B deviation, upload (DICOM zip / NIfTI / mesh), hover tooltip, export (PNG/TIFF+DPI/STL/PLY/OBJ/VTP/DICOM + camera pose), manual anchor + ref/target swap, UI switcher + Share panel. No placeholders. Parity enforced.
+- **De-identified demo** (`data/demo/shoulder_demo.nii.gz`, NIfTI → no patient tags) ships for all users; default session; bilateral so Mode A + Mode B both work. Series text is read live from metadata (nothing hardcoded).
+- **Deploy:** one-line `./deploy.sh`; backend amd64 image builds (open3d + full stack); React image builds; compose config valid; demo baked into the image.
+- **Docs:** README reworked (animated SVG header, real demo images, expandable sections), Apache-2.0 (© Ariorad Moniri), CHANGELOG, issue/PR templates, CONTRIBUTING.
+- **Honest caveats retained:** single-subject describes not proves; a thorax-fused bone needs manual isolation/clip before Mode B is clinically meaningful; radiolucent anchors invisible on CT; research-only.
