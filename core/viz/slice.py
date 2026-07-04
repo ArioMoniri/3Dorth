@@ -131,6 +131,113 @@ def slices_from_voxel(ijk, shape_zyx) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Oblique / arbitrary-plane reformat — "any shape of cross-section". A plane is a
+# world-space point (origin) + a unit normal; we sample the volume on a square
+# grid in that plane so the 3D cut and the 2D reformat are matched at *every*
+# pixel: pixel (r, c) <-> world = origin + (c-cx)*px*u + (r-cy)*px*v. The three
+# orthogonal planes are just the axis-aligned special case; this handles any tilt.
+# --------------------------------------------------------------------------- #
+def plane_basis(normal, up=None):
+    """Right-handed orthonormal (n, u, v): ``u`` is the image column axis, ``v`` the
+    row axis, both in the plane ⟂ ``n``. Deterministic, so 3D and 2D agree."""
+    n = np.asarray(normal, dtype=np.float64)
+    ln = np.linalg.norm(n)
+    if ln < 1e-9:
+        raise ValueError("normal must be non-zero")
+    n = n / ln
+    if up is None:
+        up = np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    up = np.asarray(up, dtype=np.float64)
+    u = up - np.dot(up, n) * n
+    if np.linalg.norm(u) < 1e-6:                    # up ∥ n: pick any in-plane axis
+        alt = np.array([1.0, 0.0, 0.0])
+        u = alt - np.dot(alt, n) * n
+    u = u / np.linalg.norm(u)
+    v = np.cross(n, u)
+    v = v / np.linalg.norm(v)
+    return n, u, v
+
+
+def oblique_grid_world(origin, normal, up=None, size_mm=200.0, px_mm=1.0,
+                       max_dim: int = 512):
+    """(world_points[H,W,3], meta) for a square plane grid centred at ``origin``."""
+    n, u, v = plane_basis(normal, up)
+    npx = int(max(2, min(int(max_dim), round(float(size_mm) / float(px_mm)))))
+    off = (np.arange(npx) - (npx - 1) / 2.0) * float(px_mm)
+    cc, rr = np.meshgrid(off, off)                  # cc→columns(u), rr→rows(v)
+    origin = np.asarray(origin, dtype=np.float64)
+    world = origin[None, None, :] + cc[..., None] * u + rr[..., None] * v
+    meta = {"origin_xyz_mm": [float(x) for x in origin],
+            "normal": [float(x) for x in n], "u": [float(x) for x in u],
+            "v": [float(x) for x in v], "px_mm": float(px_mm), "size_px": npx,
+            "size_mm": float(px_mm) * npx}
+    return world, meta
+
+
+def oblique_slice(arr: np.ndarray, spacing, offset, origin, normal, *, up=None,
+                  size_mm=200.0, px_mm=1.0, max_dim: int = 512,
+                  window: float = BONE_WINDOW, level: float = BONE_LEVEL,
+                  overlay_mask: np.ndarray | None = None):
+    """Sample ``arr`` on an arbitrary plane → (uint8 image, meta). Trilinear; out-of
+    -volume samples read as air (arr.min()). Grayscale, or RGB if an overlay mask
+    is given (bone tint). ``meta`` carries the basis so callers can map pixel↔world."""
+    sx, sy, sz = (float(s) for s in spacing)
+    ox, oy, oz = (float(o) for o in offset)
+    world, meta = oblique_grid_world(origin, normal, up, size_mm, px_mm, max_dim)
+    wx, wy, wz = world[..., 0], world[..., 1], world[..., 2]
+    # world = idx*spacing + offset  (world x↔ix↔arr axis2, y↔iy↔axis1, z↔iz↔axis0)
+    ix = (wx - ox) / sx
+    iy = (wy - oy) / sy
+    iz = (wz - oz) / sz
+    coords = np.stack([iz, iy, ix], axis=0)          # arr is [z, y, x]
+    sampled = ndimage.map_coordinates(arr, coords, order=1, mode="constant",
+                                      cval=float(arr.min()))
+    gray = window_to_uint8(sampled, window, level)
+    if overlay_mask is not None:
+        m = ndimage.map_coordinates(overlay_mask.astype(np.float32), coords,
+                                    order=0, mode="constant", cval=0.0) > 0.5
+        rgb = np.stack([gray, gray, gray], axis=-1)
+        rgb[m, 0] = np.maximum(rgb[m, 0], 200)
+        return rgb, meta
+    return gray, meta
+
+
+def render_oblique_png(arr, spacing, offset, origin, normal, *, up=None,
+                       size_mm=200.0, px_mm=1.0, max_dim: int = 512,
+                       window: float = BONE_WINDOW, level: float = BONE_LEVEL,
+                       overlay_mask=None):
+    """Oblique reformat as (PNG bytes, meta)."""
+    img, meta = oblique_slice(arr, spacing, offset, origin, normal, up=up,
+                              size_mm=size_mm, px_mm=px_mm, max_dim=max_dim,
+                              window=window, level=level, overlay_mask=overlay_mask)
+    return encode_png(img), meta
+
+
+def oblique_pixel_to_world(meta, row: float, col: float) -> tuple:
+    """Pixel (row, col) on an oblique reformat → world (x, y, z) mm (exact inverse
+    of the sampling grid, so a 2D click lands on the matching 3D point)."""
+    o = np.asarray(meta["origin_xyz_mm"], dtype=np.float64)
+    u = np.asarray(meta["u"], dtype=np.float64)
+    v = np.asarray(meta["v"], dtype=np.float64)
+    c0 = (meta["size_px"] - 1) / 2.0
+    p = o + (float(col) - c0) * meta["px_mm"] * u + (float(row) - c0) * meta["px_mm"] * v
+    return (float(p[0]), float(p[1]), float(p[2]))
+
+
+def world_to_oblique_pixel(meta, world) -> tuple:
+    """World (x, y, z) → (row, col) on the oblique reformat (project onto the plane
+    basis). Fractional; caller rounds. The out-of-plane component is dropped."""
+    o = np.asarray(meta["origin_xyz_mm"], dtype=np.float64)
+    u = np.asarray(meta["u"], dtype=np.float64)
+    v = np.asarray(meta["v"], dtype=np.float64)
+    d = np.asarray(world, dtype=np.float64) - o
+    c0 = (meta["size_px"] - 1) / 2.0
+    col = float(np.dot(d, u)) / meta["px_mm"] + c0
+    row = float(np.dot(d, v)) / meta["px_mm"] + c0
+    return (row, col)
+
+
 def volume_info(arr: np.ndarray, spacing, offset, side: str) -> dict:
     sx, sy, sz = (float(s) for s in spacing)
     ox, oy, oz = (float(o) for o in offset)

@@ -237,6 +237,8 @@ def region_thumbnails(sid: str, side: str) -> dict:
 # --------------------------------------------------------------------------- #
 _SLICE_LRU: "OrderedDict[tuple, bytes]" = OrderedDict()
 _SLICE_LRU_MAX = 128
+_OBLIQUE_LRU: "OrderedDict[tuple, dict]" = OrderedDict()
+_OBLIQUE_LRU_MAX = 64
 
 
 def _volume_side(sid: str, side: str):
@@ -292,6 +294,54 @@ def pick_to_slices(sid: str, req: PickReq) -> dict:
     return {"voxel_ijk": list(ijk), "in_bounds": bool(in_bounds),
             "slices": mpr.slices_from_voxel(ijk, arr.shape),
             "world_xyz_mm": req.world_xyz_mm}
+
+
+# --------------------------------------------------------------------------- #
+# Oblique / arbitrary cross-section (Phase VII): sample the volume on ANY plane
+# (origin + normal), so the 3D cut widget and the 2D reformat are matched at every
+# pixel. Returns the image AND the plane basis so the caller can map pixel<->world.
+# Light work, LRU-cached; outside COMPUTE_SEMAPHORE.
+# --------------------------------------------------------------------------- #
+class ObliqueReq(BaseModel):
+    side: str | None = None
+    origin_xyz_mm: list[float]
+    normal: list[float]
+    up: list[float] | None = None
+    size_mm: float = 220.0
+    px_mm: float = 1.0
+    max_dim: int = 512
+    window: float = mpr.BONE_WINDOW
+    level: float = mpr.BONE_LEVEL
+
+
+@router.post("/session/{sid}/oblique-slice")
+def oblique_slice(sid: str, req: ObliqueReq) -> dict:
+    sd = _volume_side(sid, req.side or "")
+    if len(req.origin_xyz_mm) != 3 or len(req.normal) != 3:
+        raise HTTPException(422, "origin_xyz_mm and normal must be length-3")
+    max_dim = int(max(32, min(1024, req.max_dim)))
+    px_mm = float(min(max(req.px_mm, 0.1), 10.0))
+    size_mm = float(min(max(req.size_mm, 10.0), 1000.0))
+    key = (sid, sd["side"], tuple(round(x, 2) for x in req.origin_xyz_mm),
+           tuple(round(x, 4) for x in req.normal),
+           tuple(round(x, 4) for x in req.up) if req.up else None,
+           size_mm, px_mm, max_dim, float(req.window), float(req.level))
+    cached = _OBLIQUE_LRU.get(key)
+    if cached is None:
+        try:
+            png, meta = mpr.render_oblique_png(
+                sd["arr"], sd["spacing"], sd["offset_xyz"], req.origin_xyz_mm,
+                req.normal, up=req.up, size_mm=size_mm, px_mm=px_mm, max_dim=max_dim,
+                window=req.window, level=req.level)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        import base64
+        cached = {"image_png_base64": base64.b64encode(png).decode("ascii"), "meta": meta}
+        _OBLIQUE_LRU[key] = cached
+        while len(_OBLIQUE_LRU) > _OBLIQUE_LRU_MAX:
+            _OBLIQUE_LRU.popitem(last=False)
+    _OBLIQUE_LRU.move_to_end(key)
+    return cached
 
 
 # --------------------------------------------------------------------------- #

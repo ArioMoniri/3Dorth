@@ -68,8 +68,11 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 | II Slice backend | `/api/session/{sid}/slice` MPR PNG; world↔voxel map; memory bounded | ✅ `core/viz/slice.py` + volume-info/slice/pick-to-slices + LRU; 14 tests; live coronal slice on the demo = real CT |
 | III MPR viewer (both UIs) | 3 planes + 3D, movable crosshair, parity | ✅ React (npm build + browser drive: 3 CT panels, crosshair, W/L, 3D pick→slices) + trame (qa_trame_mpr.py byte-identical to core.viz.slice; parity 4/4; no regression) |
 | IV Compare | two registered MPR viewers, matched cross-section | 🟡 backend done — `/compare-slice-map` maps ref→tgt via cached registration, **gated on inlier ≥0.30** (thorax-fused bone reported unreliable, not trusted); 3 tests. UI (side-by-side compare) pending |
-| V AR MVP | valid GLB opens in native mobile AR | 🟡 backend done — `core/export/mesh.py` GLB (per-vertex colour bake, triangle cap 250k) + `GET /model.glb` (byte-cached); 4 tests round-trip GLB in trimesh. `<model-viewer>` button pending |
-| VI AR/WebXR | in-AR clipping-plane cross-section (device-gated) | ⬜ |
+| V AR MVP | valid GLB opens in native mobile AR | 🟡 backend done — `core/export/mesh.py` GLB (per-vertex colour bake, triangle cap 250k) + `GET /model.glb` (byte-cached, real session serves 1.4 MB valid glTF); 4 tests round-trip GLB in trimesh. `<model-viewer>` button pending |
+| VI AR/WebXR | in-AR clipping-plane cross-section (device-gated) | 🟡 UI in flight (three.js clip plane + WebXR feature-detect + graceful non-AR fallback) |
+| VII Oblique / any cross-section | 3D cut ↔ 2D reformat matched at *every* pixel; arbitrary plane | 🟡 backend done — `core/viz/slice.oblique_slice` samples ANY plane (origin+normal) with exact pixel↔world inverse (`oblique_pixel_to_world`/`world_to_oblique_pixel`); `POST /oblique-slice` (image + basis, LRU); 5 tests (orthonormal right-handed basis, exact roundtrip, axis-normal reads intended voxel). Orientable cut widget ↔ live reformat in both UIs pending |
+
+**User acceptance for VI/VII (explicit):** the 3D bone and the 2D images must be matched at *all* points, and the user must be able to view *any shape/orientation* of cross-section. Met geometrically by the oblique sampler's exact pixel↔world inverse (a click on the 2D reformat lands on the 3D point, and the 3D cut plane defines the 2D image). Do not close VII until both UIs expose an arbitrary (tiltable) cutting plane linked live to its reformat.
 - Honest scope: not a full OHIF embed (light vtk.js MPR + slice-on-demand); AR MVP via GLB/model-viewer; WebXR cross-section is device-limited and clearly caveated.
 
 ## Progress log — full-build sweep
