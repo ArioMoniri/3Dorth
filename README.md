@@ -89,20 +89,34 @@ the research / de-identified / not-for-diagnosis caveat stays visible.
 
 **Not sure what your server supports? Let it decide.** `./scripts/setup.sh` inspects
 the box (root? docker? dockerd? kubectl+cluster? GPU? python/node/cloudflared?),
-recommends the best path, **installs what's missing**, and runs it — an ASCII menu
+recommends the best path, **installs what's missing**, and runs it — a colored menu
 with the right option pre-selected:
 
 ```bash
-git clone https://github.com/ArioMoniri/3Dorth.git && cd 3Dorth
+git clone https://github.com/ArioMoniri/3Dorth.git ~/3dorth && cd ~/3dorth
 ./scripts/setup.sh            # interactive; or --auto to just do it, --check to only inspect
+```
+
+```
+ ██████╗ ██████╗  ██████╗ ██████╗ ████████╗██╗  ██╗
+ ╚════██╗██╔══██╗██╔═══██╗██╔══██╗╚══██╔══╝██║  ██║
+  █████╔╝██║  ██║██║   ██║██████╔╝   ██║   ███████║
+  ╚═══██╗██║  ██║██║   ██║██╔══██╗   ██║   ██╔══██║
+ ██████╔╝██████╔╝╚██████╔╝██║  ██║   ██║   ██║  ██║
+ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
+  Best fit → Native (no Docker — installs Python venv / local Node / cloudflared)
+    1) Kubernetes   2) Docker   3) Native   4) Re-scan   5) Uninstall   6) Quit
 ```
 
 It picks between four paths (all end in one public Cloudflare link, no inbound port needed):
 - **Kubernetes** (`deploy_k8s.sh`) — GPU + autoscale, builds on-cluster.
 - **Docker single-pod** (`deploy_restricted.sh`) — for non-privileged RKE2 pods.
-- **Native, no Docker** (`run_native.sh`) — installs Python/Node/cloudflared and runs
-  the app directly (the API serves the React UI on one port). For bare containers
-  where `dockerd` won't run.
+- **Native, no Docker** (`run_native.sh`) — for bare containers where `dockerd` won't
+  run. Keeps everything **local for easy removal**: a Python **venv**, a private Node +
+  cloudflared under **`./.tools`**, and only the unavoidable system GL/Xvfb libraries
+  via `apt` (tracked so uninstall removes exactly those). Installs are **self-healing**
+  (retries transient failures) and any issue is reported at the end. The API serves the
+  React UI on one port (no nginx). Remove it all with `./scripts/setup.sh --uninstall`.
 - **Normal Docker** (`serve-public.sh` / `deploy.sh`) — a plain VM with Docker.
 
 If you already know you have Docker + Compose:
