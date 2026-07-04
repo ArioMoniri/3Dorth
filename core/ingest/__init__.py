@@ -12,6 +12,14 @@ from core.ingest.dicom_ingest import (
     load_series_volume,
     select_bone_series,
 )
+from core.ingest.formats import (
+    MESH_EXTENSIONS,
+    NIFTI_EXTENSIONS,
+    is_mesh,
+    is_nifti,
+    load_mesh_source,
+    load_nifti_volume,
+)
 
 __all__ = [
     "SeriesInfo",
@@ -24,4 +32,10 @@ __all__ = [
     "load_series_volume",
     "select_bone_series",
     "compare_scans",
+    "NIFTI_EXTENSIONS",
+    "MESH_EXTENSIONS",
+    "is_nifti",
+    "is_mesh",
+    "load_nifti_volume",
+    "load_mesh_source",
 ]
