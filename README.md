@@ -87,7 +87,25 @@ the research / de-identified / not-for-diagnosis caveat stays visible.
 
 ## Get it running
 
-Docker and the Compose plugin are all you need on the server:
+**Not sure what your server supports? Let it decide.** `./scripts/setup.sh` inspects
+the box (root? docker? dockerd? kubectl+cluster? GPU? python/node/cloudflared?),
+recommends the best path, **installs what's missing**, and runs it — an ASCII menu
+with the right option pre-selected:
+
+```bash
+git clone https://github.com/ArioMoniri/3Dorth.git && cd 3Dorth
+./scripts/setup.sh            # interactive; or --auto to just do it, --check to only inspect
+```
+
+It picks between four paths (all end in one public Cloudflare link, no inbound port needed):
+- **Kubernetes** (`deploy_k8s.sh`) — GPU + autoscale, builds on-cluster.
+- **Docker single-pod** (`deploy_restricted.sh`) — for non-privileged RKE2 pods.
+- **Native, no Docker** (`run_native.sh`) — installs Python/Node/cloudflared and runs
+  the app directly (the API serves the React UI on one port). For bare containers
+  where `dockerd` won't run.
+- **Normal Docker** (`serve-public.sh` / `deploy.sh`) — a plain VM with Docker.
+
+If you already know you have Docker + Compose:
 
 ```bash
 git clone https://github.com/ArioMoniri/3Dorth.git && cd 3Dorth && ./deploy.sh
@@ -164,7 +182,10 @@ so no inbound ports are needed and the link never exposes SSH/the shell.
 | **Normal** (own box / VM) | `./serve-public.sh` or `./deploy.sh` | Docker bridge | `0.0.0.0` (behind your firewall) | auto-picked, or `REACT_HOST_PORT=…` |
 | **Strict / tunnel-only** | `BIND_ADDR=127.0.0.1 ./serve-public.sh` | Docker bridge | `127.0.0.1` (tunnel is the only door) | auto-picked |
 | **Restricted server** (RKE2, no build/bridge/systemd) | `./scripts/deploy_restricted.sh` | host (no bridge) | `127.0.0.1` strict (default) · `--expose` for `0.0.0.0` | auto-picked |
+| **Native** (no Docker at all) | `./scripts/run_native.sh` | none (one process) | `127.0.0.1` strict · `--expose` | auto-picked |
 | **Kubernetes** (GPU + autoscale) | `./scripts/deploy_k8s.sh` | ClusterIP + tunnel | in-cluster | Service ports |
+
+Don't know which? `./scripts/setup.sh` detects and installs for you.
 
 All print the public Cloudflare link and keep it alive; none need an inbound port opened.
 

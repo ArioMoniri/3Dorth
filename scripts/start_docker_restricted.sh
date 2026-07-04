@@ -15,6 +15,13 @@ if docker info >/dev/null 2>&1; then
   exit 0
 fi
 
+if ! command -v dockerd >/dev/null 2>&1; then
+  echo "✗ 'dockerd' is not installed on this server (Docker can't run here)."
+  echo "  → No-Docker native path:   ./scripts/run_native.sh"
+  echo "  → Or auto-pick the best:   ./scripts/setup.sh"
+  exit 1
+fi
+
 echo "▶ starting dockerd (restricted: vfs storage, no bridge, no iptables) — log: $LOG"
 # These are the ONLY flags that work in this non-privileged container. data-root /
 # exec-root live under \$HOME so we never touch a path we can't write.

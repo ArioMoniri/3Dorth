@@ -6,6 +6,7 @@ bundle). All analysis lives in ``core``; this module must contain none.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -46,3 +47,13 @@ app.mount("/api/exports", StaticFiles(directory=str(_EXPORTS_DIR)), name="export
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "version": app.version}
+
+
+# Native / no-Docker mode: serve the built React SPA from this same process so the
+# whole app runs on ONE port with NO nginx (the UI's /api calls hit these routes on
+# the same origin). Mounted LAST so every /api route above still wins. Set
+# THREEDORTH_STATIC_DIR=app_react/dist (scripts/run_native.sh does this). Ignored by
+# the Docker/K8s deploys, which serve the SPA via nginx.
+_STATIC_DIR = os.environ.get("THREEDORTH_STATIC_DIR", "").strip()
+if _STATIC_DIR and Path(_STATIC_DIR).is_dir():
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")
