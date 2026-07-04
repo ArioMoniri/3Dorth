@@ -158,6 +158,13 @@ expose a different parameter set. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 _Add screenshots of the thickness map, region view, and Mode B deviation here._
 
+## Contributing & changelog
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the parity rule and workflow, and
+[`CHANGELOG.md`](CHANGELOG.md) for the release history. Bug reports and feature
+requests use the templates under `.github/ISSUE_TEMPLATE/`.
+
 ## License
 
-MIT (see `LICENSE`).
+Apache License 2.0 — © 2026 Ariorad Moniri. See [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).

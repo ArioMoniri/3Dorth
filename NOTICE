@@ -1,0 +1,11 @@
+3Dorth — 3D cortical bone mapping and comparison from CT
+Copyright 2026 Ariorad Moniri
+
+Licensed under the Apache License, Version 2.0.
+
+This product reproduces the cortical-thickness mapping method described in:
+  Guo J, Zhou Y, Shang M, Chen W, Hou Z, Zhang Y, Dong W. Morphological
+  characteristics of the surgical neck region in the proximal humerus at
+  different ages. European Journal of Medical Research 2022;27:102.
+
+Research tooling only; not a medical device and not for clinical diagnosis.

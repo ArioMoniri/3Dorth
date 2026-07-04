@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What clinical or research question would this help answer?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the tool do? Which mode / UI / export format?
+  - type: checkboxes
+    id: parity
+    attributes:
+      label: Scope
+      options:
+        - label: This is analysis logic and should live in `core/` (surfaced in both UIs)
+        - label: This adds a configurable parameter (should go in the registry)

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Method / reproduced defaults
+    url: https://github.com/ArioMoniri/3Dorth/blob/main/docs/METHOD.md
+    about: How the pipeline reproduces Guo et al. 2022 and the exact defaults.
+  - name: Contributing & parity rule
+    url: https://github.com/ArioMoniri/3Dorth/blob/main/CONTRIBUTING.md
+    about: How the two frontends stay in sync and how to add features.

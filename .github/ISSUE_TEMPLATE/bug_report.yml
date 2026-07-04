@@ -1,0 +1,46 @@
+name: Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not attach patient data or PHI — use a
+        de-identified sample or a synthetic phantom.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: Steps to reproduce, expected vs actual.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core (analysis)
+        - api
+        - React frontend
+        - trame frontend
+        - deployment / Docker
+        - docs
+    validations:
+      required: true
+  - type: input
+    id: data
+    attributes:
+      label: Input data
+      description: Modality, format (DICOM zip / NIfTI / mesh), geometry, bone.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, browser, how you launched (local / Docker).
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Relevant console/server output. De-identify first.
+      render: shell

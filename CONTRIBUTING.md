@@ -34,8 +34,22 @@ uv pip install -r requirements.txt
 .venv/bin/python scripts/watchdog.py
 ```
 
+## Smoke checklist (run before opening a PR)
+- [ ] `make test` (or `.venv/bin/pytest -q`) green.
+- [ ] `python scripts/watchdog.py` GREEN.
+- [ ] `cd app_react && npm run build` exits 0.
+- [ ] `python -c "import app_trame.app"` constructs without error.
+- [ ] Every button/control you touched actually does something — no placeholders.
+- [ ] Update `CHANGELOG.md` under **Unreleased**.
+
+## Changelog policy
+Every user-facing change gets one line under **Unreleased** in `CHANGELOG.md`
+([Keep a Changelog](https://keepachangelog.com/) format). Releases move the
+Unreleased entries under a dated version heading.
+
 ## House rules
 - Never commit patient data (`.gitignore` blocks the CT ZIPs and DICOM).
 - Never fabricate measurements. On failure, stop and report.
 - De-identify every output (no name/MRN/dates).
 - This is research tooling, not a clinical diagnostic — keep that framing in docs.
+- Licensed under Apache 2.0; by contributing you agree your work is under the same.
