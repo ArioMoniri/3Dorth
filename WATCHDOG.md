@@ -64,8 +64,8 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 ## Imaging viewer + cross-section + AR (new phase — see GOAL_IMAGING.md)
 | Phase | Gate | Status |
 |---|---|---|
-| I Design | clinical + technical design docs; coherent RAM-bounded API contract | 🟡 in progress |
-| II Slice backend | `/api/session/{sid}/slice` MPR PNG; world↔voxel map; memory bounded | ⬜ |
+| I Design | clinical + technical design docs; coherent RAM-bounded API contract | ✅ (IMAGING_DESIGN.md + _clinical/_technical; contract locked) |
+| II Slice backend | `/api/session/{sid}/slice` MPR PNG; world↔voxel map; memory bounded | ✅ `core/viz/slice.py` + volume-info/slice/pick-to-slices + LRU; 14 tests; live coronal slice on the demo = real CT |
 | III MPR viewer (both UIs) | 3 planes + 3D, movable crosshair, parity | ⬜ |
 | IV Compare | two registered MPR viewers, matched cross-section | ⬜ |
 | V AR MVP | valid GLB opens in native mobile AR | ⬜ |

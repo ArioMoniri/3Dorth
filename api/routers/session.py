@@ -13,11 +13,14 @@ import json
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from collections import OrderedDict
+
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
 import core.parameters as P
 import core.resources as R
+import core.viz.slice as mpr
 from core import pipeline
 from core.export import export_bundle
 
@@ -215,6 +218,69 @@ def region_thumbnails(sid: str, side: str) -> dict:
         thumbs = pipeline.region_thumbnails(arr, sd["spacing"], P.default_parameters(),
                                             EXPORTS, f"{sid}_{side}")
     return {"thumbnails": thumbs}
+
+
+# --------------------------------------------------------------------------- #
+# MPR image viewer — slice-on-demand (see docs/IMAGING_DESIGN.md). Light work,
+# outside COMPUTE_SEMAPHORE, with a small PNG LRU so scrubbing feels instant.
+# --------------------------------------------------------------------------- #
+_SLICE_LRU: "OrderedDict[tuple, bytes]" = OrderedDict()
+_SLICE_LRU_MAX = 128
+
+
+def _volume_side(sid: str, side: str):
+    s = SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(404, "session not found")
+    sd = s["sides"].get(side) if side else next(iter(s["sides"].values()), None)
+    if not sd:
+        raise HTTPException(400, f"unknown side '{side}'")
+    if sd.get("arr") is None:
+        raise HTTPException(400, "this side has no volume (mesh session)")
+    return sd
+
+
+class PickReq(BaseModel):
+    side: str | None = None
+    world_xyz_mm: list[float]
+
+
+@router.get("/session/{sid}/volume-info")
+def volume_info(sid: str, side: str = "") -> dict:
+    sd = _volume_side(sid, side)
+    return mpr.volume_info(sd["arr"], sd["spacing"], sd["offset_xyz"], sd["side"])
+
+
+@router.get("/session/{sid}/slice")
+def slice_png(sid: str, plane: str, index: int, side: str = "",
+              window: float = mpr.BONE_WINDOW, level: float = mpr.BONE_LEVEL,
+              max_dim: int = Query(512, ge=32, le=1024)) -> Response:
+    if plane not in mpr.PLANES:
+        raise HTTPException(422, f"plane must be one of {mpr.PLANES}")
+    sd = _volume_side(sid, side)
+    key = (sid, sd["side"], plane, int(index), float(window), float(level), int(max_dim))
+    png = _SLICE_LRU.get(key)
+    if png is None:
+        png = mpr.render_slice_png(sd["arr"], sd["spacing"], plane, index,
+                                   window=window, level=level, max_dim=max_dim)
+        _SLICE_LRU[key] = png
+        while len(_SLICE_LRU) > _SLICE_LRU_MAX:
+            _SLICE_LRU.popitem(last=False)
+    _SLICE_LRU.move_to_end(key)
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=300"})
+
+
+@router.post("/session/{sid}/pick-to-slices")
+def pick_to_slices(sid: str, req: PickReq) -> dict:
+    sd = _volume_side(sid, req.side or "")
+    arr = sd["arr"]
+    ijk = mpr.world_to_voxel(req.world_xyz_mm, sd["spacing"], sd["offset_xyz"])
+    nz, ny, nx = arr.shape
+    in_bounds = 0 <= ijk[0] < nx and 0 <= ijk[1] < ny and 0 <= ijk[2] < nz
+    return {"voxel_ijk": list(ijk), "in_bounds": bool(in_bounds),
+            "slices": mpr.slices_from_voxel(ijk, arr.shape),
+            "world_xyz_mm": req.world_xyz_mm}
 
 
 @router.post("/session/{sid}/compare")
