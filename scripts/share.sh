@@ -41,7 +41,40 @@ trap cleanup EXIT INT TERM
 url_of() { grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$1" 2>/dev/null | tail -1; }
 
 echo "Resilient Cloudflare tunnels (React :$REACT_PORT, trame :$TRAME_PORT). Leave running."
-last=""
+
+healthy() {  # $1 = url -> 0 if it answers 2xx/3xx
+  [ -z "$1" ] && return 1
+  local code
+  code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null)"
+  case "$code" in 2*|3*) return 0 ;; *) return 1 ;; esac
+}
+
+# Recycle a tunnel ONLY once its URL has served at least once and then goes dead
+# (the sleep/wake / edge-reset case). A brand-new tunnel takes 20-40s to bind at
+# the edge (transient 530/000), so we must NOT recycle before it has ever been
+# healthy — otherwise we churn URLs forever and it never stabilises.
+check_side() {  # $1=url  $2=name  $3=port  ; state vars are namerefs via eval
+  local url="$1" name="$2" port="$3"
+  local seen_v="${name}_seen" fail_v="${name}_fail" lasturl_v="${name}_lasturl"
+  # reset per-side state when the URL changes (a fresh tunnel came up)
+  if [ "$url" != "${!lasturl_v}" ]; then
+    eval "$seen_v=0; $fail_v=0; $lasturl_v=\"\$url\""
+  fi
+  [ -z "$url" ] && return
+  if healthy "$url"; then
+    eval "$seen_v=1; $fail_v=0"
+  elif [ "${!seen_v}" = 1 ]; then
+    eval "$fail_v=\$(( ${!fail_v} + 1 ))"
+    if [ "${!fail_v}" -ge 2 ]; then
+      echo "$(date '+%H:%M:%S') $name tunnel URL died ($url) — recycling for a fresh one" >&2
+      pkill -f "cloudflared tunnel --url http://127.0.0.1:$port" 2>/dev/null
+      eval "$seen_v=0; $fail_v=0"; last=""
+    fi
+  fi
+}
+
+last=""; react_seen=0; react_fail=0; react_lasturl=""
+trame_seen=0; trame_fail=0; trame_lasturl=""
 while true; do
   r="$(url_of "$RLOG")"; t="$(url_of "$TLOG")"
   cur="$r|$t"
@@ -58,5 +91,8 @@ JSON
     echo "  $(date '+%H:%M:%S')  React: ${r:-<pending>}   trame: ${t:-<pending>}"
     last="$cur"
   fi
-  sleep 5
+
+  check_side "$r" react "$REACT_PORT"
+  check_side "$t" trame "$TRAME_PORT"
+  sleep 12
 done
