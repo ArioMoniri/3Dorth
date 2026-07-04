@@ -54,6 +54,8 @@ services:
 
   react:
     image: 3dorth-react:latest
+    # amd64 so an image built on an Apple-Silicon/arm64 box still runs on x86 servers
+    platform: linux/amd64
     build:
       context: .
       dockerfile: deploy/Dockerfile.react
