@@ -30,6 +30,13 @@ HAVE_CF=no; have cloudflared && HAVE_CF=yes
 HAVE_PY=no; PYV="none"; have python3 && { HAVE_PY=yes; PYV="$(python3 --version 2>&1 | awk '{print $2}')"; }
 HAVE_NODE=no; have node && HAVE_NODE=yes
 
+# public-tunnel viability: cloudflare needs port 7844 (often firewalled); pinggy/ngrok use 443
+_tcp() { if command -v timeout >/dev/null 2>&1; then timeout 5 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; else (exec 3<>/dev/tcp/$1/$2) 2>/dev/null; fi; }
+TUN="local-only"
+if have cloudflared && _tcp region1.v2.argotunnel.com 7844; then TUN="cloudflare (7844 open)"
+elif _tcp a.pinggy.io 443; then TUN="pinggy (443 → cloudflare's 7844 is blocked)"
+elif have ngrok; then TUN="ngrok"; fi
+
 if   [ "$K8S_OK" = yes ]; then REC=k8s;     REC_TXT="Kubernetes (GPU + autoscale)"
 elif [ "$DOCKER_UP" = yes ] || [ "$HAVE_DOCKERD" = yes ]; then REC=docker; REC_TXT="Docker single-pod (restricted)"
 else REC=native; REC_TXT="Native (no Docker — installs Python venv / local Node / cloudflared)"; fi
@@ -40,6 +47,7 @@ report() {
   printf "  ${BOLD}GPU${RST}      %s  ${DIM}(%s)${RST}\n" "$(yn "$GPU")" "$GPU_NAME"
   printf "  ${BOLD}Tools${RST}    docker:%s  dockerd:%s  running:%s  kubectl:%s  cluster:%s\n" "$(yn "$HAVE_DOCKER")" "$(yn "$HAVE_DOCKERD")" "$(yn "$DOCKER_UP")" "$(yn "$HAVE_KUBECTL")" "$(yn "$K8S_OK")"
   printf "           python:%s${DIM}(%s)${RST}  node:%s  cloudflared:%s\n" "$(yn "$HAVE_PY")" "$PYV" "$(yn "$HAVE_NODE")" "$(yn "$HAVE_CF")"
+  printf "  ${BOLD}Tunnel${RST}   public link via: ${CYN}%s${RST}\n" "$TUN"
   printf "  ${BOLD}Best fit${RST} ${GRN}→ %s${RST}\n" "$REC_TXT"
 }
 
@@ -62,6 +70,11 @@ do_uninstall() { echo; step "Uninstall / clean up"; ./scripts/run_native.sh --un
 case "${1:-}" in
   --check)     report; exit 0 ;;
   --uninstall) do_uninstall; exit 0 ;;
+  --kill|--down) step "Stopping any running 3Dorth (app + tunnel)…"; ./scripts/run_native.sh --down 2>/dev/null; [ "$HAVE_DOCKERD" = yes ] && ./scripts/deploy_restricted.sh --down 2>/dev/null; ok "stopped."; exit 0 ;;
+  --restart)   step "Restarting (kills previous, reuses installs)…"
+               case "$REC" in docker) run_docker ;; *) run_native --restart ;; esac; exit $? ;;
+  --update)    step "Updating (git pull) + restarting…"; git pull --ff-only 2>&1 | tail -2
+               case "$REC" in docker) run_docker ;; *) run_native --restart ;; esac; exit $? ;;
   --auto)      report; case "$REC" in k8s) run_k8s ;; docker) run_docker ;; native) run_native ;; esac; exit $? ;;
 esac
 

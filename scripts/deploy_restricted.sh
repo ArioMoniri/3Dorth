@@ -96,5 +96,5 @@ echo "    React http://127.0.0.1:${REACT_PORT}"
 echo "    trame http://127.0.0.1:${TRAME_PORT}"
 echo
 echo "▶ open the public Cloudflare link (outbound-only; no inbound ports needed):"
-echo "    tmux new -s tunnel './scripts/share.sh ${REACT_PORT} ${TRAME_PORT}'"
+echo "    tmux new -s tunnel './scripts/tunnel.sh ${REACT_PORT} ${TRAME_PORT}'"
 echo "    cat outputs/public_urls.json     # the URL, also shown in the app top bar"

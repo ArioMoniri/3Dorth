@@ -82,4 +82,4 @@ echo "▶ opening a Cloudflare quick tunnel (outbound-only; exposes only the app
 echo "  the public link prints below, updates in outputs/public_urls.json, and shows in the app top bar."
 echo "  share the React URL. Ctrl-C stops the tunnel; containers keep running."
 echo
-exec ./scripts/share.sh "$REACT_HOST_PORT" "$TRAME_HOST_PORT"
+exec ./scripts/tunnel.sh "$REACT_HOST_PORT" "$TRAME_HOST_PORT"

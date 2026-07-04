@@ -182,12 +182,8 @@ if [ -n "$ISSUES" ]; then
   echo "  (the app may still run with reduced features; fix the above and re-run.)"
 fi
 
-# ---- 8. public tunnel -----------------------------------------------------
+# ---- 8. public tunnel (auto-detects cloudflare/pinggy/ngrok for THIS network) ----
 printf 'REACT_PORT=%s\nTRAME_PORT=%s\nAPI_PORT=%s\n' "$APP_PORT" "$TRAME_PORT" "$APP_PORT" > outputs/ports.env
 [ -n "$appok" ] || exit 1
-if have cloudflared; then
-  echo; step "Opening the public Cloudflare link (outbound-only; Ctrl-C stops the tunnel, app keeps running)…"
-  exec ./scripts/share.sh "$APP_PORT" "$TRAME_PORT"
-else
-  warn "no cloudflared — reach it locally at http://127.0.0.1:${APP_PORT}"
-fi
+echo; step "Opening a public link (auto-picks a tunnel that works from here; Ctrl-C stops it, app keeps running)…"
+exec ./scripts/tunnel.sh "$APP_PORT" "$TRAME_PORT"

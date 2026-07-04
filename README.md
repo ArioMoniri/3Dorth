@@ -121,6 +121,20 @@ It picks between four paths (all end in one public Cloudflare link, no inbound p
   Remove it all with `./scripts/setup.sh --uninstall`.
 - **Normal Docker** (`serve-public.sh` / `deploy.sh`) — a plain VM with Docker.
 
+**The public link auto-heals.** `scripts/tunnel.sh` (run for you at the end) detects
+which tunnel actually works from your network and keeps a fresh URL in
+`outputs/public_urls.json` + the app's top bar: **Cloudflare** if port 7844 is open,
+else **Pinggy** or **ngrok** over 443 (common on locked-down pods where 7844 is
+firewalled). Lifecycle:
+
+```bash
+./scripts/setup.sh --restart     # kill previous + bring it back up (reuses installs)
+./scripts/setup.sh --update      # git pull + restart
+./scripts/setup.sh --kill        # stop the app + tunnel
+./scripts/setup.sh --uninstall   # remove the local install (.venv/.tools/build)
+cat outputs/public_urls.json     # the current public link, any time
+```
+
 If you already know you have Docker + Compose:
 
 ```bash
