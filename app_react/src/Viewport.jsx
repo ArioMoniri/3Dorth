@@ -95,10 +95,20 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
       background: [1, 1, 1],
     });
     genericRenderWindow.setContainer(containerRef.current);
+    // Sync the OpenGL view to the container's real (device-pixel) size now, up
+    // front. Without this the view stays at its 300×300 default until a stray
+    // resize event fires — which both mis-fits the first render and, because the
+    // picker scales by getSize(), makes early hover picks land in the wrong place.
+    genericRenderWindow.resize();
 
     const renderer = genericRenderWindow.getRenderer();
     const renderWindow = genericRenderWindow.getRenderWindow();
     const interactor = genericRenderWindow.getInteractor();
+    // The OpenGL view renders into a device-pixel backing store; on HiDPI /
+    // Retina displays (devicePixelRatio > 1) that is larger than the CSS box.
+    // vtkCellPicker.pick() expects DEVICE-pixel display coordinates, so we must
+    // scale CSS coordinates by this ratio or every pick lands in the wrong place.
+    const apiRenderWindow = genericRenderWindow.getApiSpecificRenderWindow();
 
     const axes = vtkAxesActor.newInstance();
     const orientationWidget = vtkOrientationMarkerWidget.newInstance({
@@ -125,6 +135,7 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
       interactor,
       orientationWidget,
       picker,
+      apiRenderWindow,
       actor: null,
       mapper: null,
       polydata: null,
@@ -140,9 +151,15 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
         return;
       }
       const rect = el.getBoundingClientRect();
-      const x = clientX - rect.left;
+      // Scale CSS-pixel cursor coordinates into the render window's device-pixel
+      // space (getSize() returns device px). On a 1× display the ratio is 1; on
+      // HiDPI it is devicePixelRatio, and without it every pick misses.
+      const size = ctx.apiRenderWindow.getSize();
+      const ratioX = rect.width ? size[0] / rect.width : 1;
+      const ratioY = rect.height ? size[1] / rect.height : 1;
+      const x = (clientX - rect.left) * ratioX;
       // vtk uses a bottom-left origin for display coordinates.
-      const y = rect.height - (clientY - rect.top);
+      const y = (rect.height - (clientY - rect.top)) * ratioY;
       ctx.picker.pick([x, y, 0], ctx.renderer);
       const actors = ctx.picker.getActors();
       const cellId = ctx.picker.getCellId();
@@ -168,9 +185,19 @@ export default function Viewport({ geometry, onHover, cameraPose }) {
 
     const onResize = () => genericRenderWindow.resize();
     window.addEventListener('resize', onResize);
+    // A ResizeObserver catches container-only layout changes (panel toggles,
+    // flex reflow) that a window 'resize' misses, and fires once as soon as the
+    // container has its real size — keeping the render fit and the picker's
+    // device-pixel scaling correct without waiting for a stray window resize.
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => genericRenderWindow.resize());
+      resizeObserver.observe(el);
+    }
 
     return () => {
       window.removeEventListener('resize', onResize);
+      if (resizeObserver) resizeObserver.disconnect();
       el.removeEventListener('mousemove', onMove);
       el.removeEventListener('mouseleave', onLeave);
       orientationWidget.setEnabled(false);
