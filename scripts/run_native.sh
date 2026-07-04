@@ -69,27 +69,45 @@ else
   ok "all system libraries already present"
 fi
 
-# ---- 2. Python venv (from the existing python3 >= 3.10 — no global install) -
-PY=python3
-pv="$($PY -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0.0)"
-case "$pv" in 3.1[0-9]|3.[2-9]*) : ;; *)
-  for alt in python3.12 python3.11 python3.10; do have "$alt" && { PY="$alt"; break; }; done
+# ---- 2. Python 3.12 + deps via uv (self-contained, LOCAL under ./.tools) ---
+# The frozen requirements need Python >= 3.11 (e.g. contourpy 1.3.3), so we do NOT
+# rely on the system python (this server is 3.10). uv fetches a standalone CPython
+# into ./.tools (removable) and installs fast. Falls back to a system python3 >= 3.11.
+export UV_INSTALL_DIR="$TOOLS" UV_PYTHON_INSTALL_DIR="$TOOLS/python" UV_CACHE_DIR="$TOOLS/uv-cache" UV_NO_MODIFY_PATH=1
+UVBIN=""
+UV="$TOOLS/uv"
+[ -x "$UV" ] || { have uv && UV="$(command -v uv)"; }
+if [ ! -x "$UV" ]; then
+  step "Installing uv (self-contained Python + fast installer → ./.tools)…"
+  retry 2 sh -c "curl -LsSf https://astral.sh/uv/install.sh | sh" >/dev/null 2>&1 || note_issue "uv install failed (network?)"
+  [ -x "$TOOLS/uv" ] && UV="$TOOLS/uv"
+fi
+if [ -x "$UV" ]; then
+  UVBIN="$UV"
+  step "Python 3.12 venv via uv…"
+  retry 2 "$UVBIN" venv --python 3.12 .venv >/dev/null 2>&1 || { err "uv venv failed"; note_issue "uv venv --python 3.12 failed"; }
+  step "Python dependencies (open3d/VTK/… via uv — a few minutes first run)…"
+  if retry 2 "$UVBIN" pip install --python .venv/bin/python -r requirements.txt; then ok "python deps installed (Python 3.12)"
+  else err "dependency install failed"; note_issue "uv pip install failed (arch must be x86-64 for open3d wheels)"; fi
+else
+  warn "uv unavailable — trying a system python3 >= 3.11"
+  PY=python3; for alt in python3.12 python3.11; do have "$alt" && { PY="$alt"; break; }; done
   pv="$($PY -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0.0)"
-esac
-step "Python venv (.venv) from $PY $pv…"
-case "$pv" in 3.1[0-9]|3.[2-9]*) : ;; *) err "Python >= 3.10 required (found $pv)"; note_issue "no Python >= 3.10"; ;; esac
-[ -d .venv ] || retry 2 $PY -m venv .venv || { err "venv creation failed"; note_issue "python venv failed (need python3-venv)"; }
-retry 2 .venv/bin/pip install -q --upgrade pip >/dev/null 2>&1 || warn "pip self-upgrade skipped"
-step "Python dependencies (open3d/VTK/… — a few minutes on first run)…"
-if retry 2 .venv/bin/pip install -q -r requirements.txt; then ok "python deps installed"
-else err "pip install -r requirements.txt failed"; note_issue "pip failed (arch must be x86-64 for open3d wheels; see outputs, or 'apt install build-essential python3-dev')"; fi
+  step "Python venv from $PY $pv…"
+  [ -d .venv ] || retry 2 $PY -m venv .venv || note_issue "python venv failed (need python3-venv)"
+  retry 2 .venv/bin/pip install -q --upgrade pip >/dev/null 2>&1 || true
+  if retry 2 .venv/bin/pip install -q -r requirements.txt; then ok "python deps installed"
+  else err "pip failed — deps need Python >= 3.11 (system is $pv). Install uv (curl -LsSf https://astral.sh/uv/install.sh | sh) and re-run."; note_issue "python deps need >=3.11; system is $pv and uv wasn't available"; fi
+fi
+# install into the .venv with whichever tool we have
+pipinstall() { if [ -n "$UVBIN" ]; then "$UVBIN" pip install --python .venv/bin/python "$@"; else .venv/bin/pip install -q "$@"; fi; }
 
 # ---- 3. auto-tune (RAM/GPU) + optional CuPy -------------------------------
 # shellcheck disable=SC1091
 . ./scripts/dynamic_resources.sh
 if [ "${THREEDORTH_GPU:-0}" = 1 ] && have nvidia-smi; then
   step "GPU on -> installing cupy-cuda12x into the venv…"
-  .venv/bin/pip install -q cupy-cuda12x >/dev/null 2>&1 && ok "cupy installed" || { warn "cupy failed — CPU fallback"; export THREEDORTH_GPU=0; note_issue "cupy-cuda12x install failed (needs CUDA runtime + device); running CPU"; }
+  pipinstall cupy-cuda12x >/dev/null 2>&1 && ok "cupy installed" || { warn "cupy failed — CPU fallback"; export THREEDORTH_GPU=0; note_issue "cupy-cuda12x install failed (needs CUDA runtime + device); running CPU"; }
 fi
 
 # ---- 4. private Node (./.tools) + build the React UI (served by the API) ---
@@ -103,10 +121,15 @@ if ! have node && [ ! -x "$TOOLS/node/bin/node" ]; then
 fi
 [ -x "$TOOLS/node/bin/node" ] && export PATH="$TOOLS/node/bin:$PATH"
 if have node && [ -f app_react/package.json ]; then
-  step "Building the React UI…"
-  if ( cd app_react && retry 2 npm ci --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ); then
+  step "Building the React UI (log: outputs/react-build.log)…"
+  # vite can OOM on tiny boxes; raise the Node heap. Full log kept for diagnosis.
+  if ( cd app_react && export NODE_OPTIONS="--max-old-space-size=4096"
+       retry 2 npm ci --no-audit --no-fund && npm run build ) > outputs/react-build.log 2>&1; then
     export THREEDORTH_STATIC_DIR="$(pwd)/app_react/dist"; ok "UI built — the API serves it on one port"
-  else warn "React build failed — API/docs only"; note_issue "React build failed (npm)"; fi
+  else
+    warn "React build failed (see outputs/react-build.log) — serving API/docs only"
+    note_issue "React build failed — last lines: $(tail -3 outputs/react-build.log 2>/dev/null | tr '\n' ' ')"
+  fi
 fi
 
 # ---- 5. private cloudflared (./.tools) ------------------------------------

@@ -112,11 +112,13 @@ It picks between four paths (all end in one public Cloudflare link, no inbound p
 - **Kubernetes** (`deploy_k8s.sh`) — GPU + autoscale, builds on-cluster.
 - **Docker single-pod** (`deploy_restricted.sh`) — for non-privileged RKE2 pods.
 - **Native, no Docker** (`run_native.sh`) — for bare containers where `dockerd` won't
-  run. Keeps everything **local for easy removal**: a Python **venv**, a private Node +
-  cloudflared under **`./.tools`**, and only the unavoidable system GL/Xvfb libraries
-  via `apt` (tracked so uninstall removes exactly those). Installs are **self-healing**
-  (retries transient failures) and any issue is reported at the end. The API serves the
-  React UI on one port (no nginx). Remove it all with `./scripts/setup.sh --uninstall`.
+  run. Keeps everything **local for easy removal**: it fetches a self-contained
+  **Python 3.12 via `uv`** (the frozen deps need ≥3.11, so it doesn't rely on the
+  system python) plus a private Node + cloudflared — all under **`./.tools`** + a
+  **`.venv`** — and only the unavoidable system GL/Xvfb libraries via `apt` (tracked so
+  uninstall removes exactly those). Installs are **self-healing** (retries) and every
+  issue is reported at the end. The API serves the React UI on one port (no nginx).
+  Remove it all with `./scripts/setup.sh --uninstall`.
 - **Normal Docker** (`serve-public.sh` / `deploy.sh`) — a plain VM with Docker.
 
 If you already know you have Docker + Compose:
