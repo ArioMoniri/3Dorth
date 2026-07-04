@@ -227,6 +227,45 @@ export function compareSliceMap(
   return postJSON(`/api/session/${sessionId}/compare-slice-map`, body);
 }
 
+// POST /api/session/{sid}/oblique-slice
+//   body: { side?, origin_xyz_mm:[x,y,z], normal:[nx,ny,nz], up?:[ux,uy,uz],
+//           size_mm?, px_mm?, max_dim?, window?, level? }
+//   -> { image_png_base64, meta:{ origin_xyz_mm, normal, u, v, px_mm, size_px,
+//        size_mm } }
+// Arbitrary (tiltable) cross-section reformat (Phase VII): the volume is
+// sampled on the plane (origin + normal); the returned image is that reformat,
+// with an EXACT pixel<->world basis in `meta` (see oblique_pixel_to_world /
+// world_to_oblique_pixel in core.viz.slice — mirrored client-side in
+// obliquePixelToWorld below so a 2D click maps to the exact 3D point).
+export function obliqueSlice(
+  sessionId,
+  { side, originXyz, normal, up, sizeMm, pxMm, window, level, maxDim },
+) {
+  const body = { origin_xyz_mm: originXyz, normal };
+  if (side) body.side = side;
+  if (up) body.up = up;
+  if (sizeMm != null) body.size_mm = sizeMm;
+  if (pxMm != null) body.px_mm = pxMm;
+  if (window != null) body.window = window;
+  if (level != null) body.level = level;
+  if (maxDim != null) body.max_dim = maxDim;
+  return postJSON(`/api/session/${sessionId}/oblique-slice`, body);
+}
+
+// Exact client-side mirror of core.viz.slice.oblique_pixel_to_world: maps a
+// pixel (row, col) on the returned oblique reformat to its 3D world point,
+// using ONLY the response's own meta (never approximated / fabricated).
+//   world = origin + (col - c0)*px_mm*u + (row - c0)*px_mm*v,  c0 = (size_px-1)/2
+export function obliquePixelToWorld(meta, row, col) {
+  const { origin_xyz_mm: o, u, v, px_mm: px, size_px: sizePx } = meta;
+  const c0 = (sizePx - 1) / 2;
+  return [
+    o[0] + (col - c0) * px * u[0] + (row - c0) * px * v[0],
+    o[1] + (col - c0) * px * u[1] + (row - c0) * px * v[1],
+    o[2] + (col - c0) * px * u[2] + (row - c0) * px * v[2],
+  ];
+}
+
 // GET /api/session/{sid}/model.glb -> binary glTF URL of the most-recently-
 // computed surface (thickness or deviation), per-vertex colour baked in. 409
 // if nothing has been computed yet. Returned as a plain URL string (like

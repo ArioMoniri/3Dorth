@@ -1452,6 +1452,81 @@ body {
   min-height: 0;
 }
 
+/* ===== Phase VII: arbitrary (oblique) cross-section ======================== */
+.oblique-wrap {
+  min-height: 0;
+}
+.oblique-controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #16161c;
+  border-bottom: 1px solid #26262e;
+}
+.oblique-controls-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f0f0f5;
+  margin-bottom: 2px;
+}
+.oblique-slider-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 56px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #c4c4d0;
+}
+.oblique-slider-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.oblique-slider-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #e8e8ee;
+}
+.oblique-btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.oblique-btn-row .mpr-wl-reset:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.oblique-readout {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: #8a8a98;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.oblique-image-box {
+  flex: 1 1 auto;
+  background: #000;
+}
+.oblique-empty {
+  color: #6a6a78;
+  font-size: 13px;
+}
+.oblique-loading-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(20, 20, 26, 0.85);
+  color: #cfd6ff;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  pointer-events: none;
+}
+.oblique-error {
+  margin: 6px 10px;
+}
+
 /* ===== Phase V: View in AR / 3D ============================================ */
 .ar-launch-btn {
   margin-left: auto;

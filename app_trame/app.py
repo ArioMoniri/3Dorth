@@ -198,6 +198,8 @@ def _refresh_session_ui() -> None:
     # Re-point the MPR viewer at the new session's active volume (or hide it for a
     # bare-mesh session). Safe to call inside a `with state` block.
     _mpr_reset_for_side()
+    # Re-seed the oblique plane widget at the new session's active volume side.
+    _oblique_reset_for_side()
     # A fresh scan invalidates any cached compare-mode registration.
     with _COMPARE_REG_LOCK:
         _COMPARE_REG_CACHE.clear()
@@ -410,6 +412,29 @@ state.mpr_img_sagittal = ""
 state.mpr_note = ("Research / de-identified — not for diagnostic use. Planes are "
                   "array-oriented (no radiological A/P/S/I laterality).")
 
+# --- Oblique (arbitrary-tilt) cross-section ------------------------------- #
+# A single free-orientation cutting plane on the 3D view (a pyvista plane
+# widget) drives a LIVE 2D reformat via core.viz.slice.render_oblique_png. The
+# plane is defined by an arbitrary (origin, normal) in the app frame — NOT
+# restricted to axial/coronal/sagittal — and the reformat is matched to the 3D
+# cut at every pixel (core.viz.slice.oblique_slice samples the volume directly
+# on that plane). Display-only: dragging the widget never triggers the
+# thickness/deviation recompute pipeline.
+state.oblique_available = False   # true once a volume side is loaded
+state.oblique_active = False      # user toggle: show the oblique panel (widget stays live regardless)
+state.oblique_side = ""           # which side the widget/reformat belongs to
+state.oblique_origin = [0.0, 0.0, 0.0]   # world mm, from the widget
+state.oblique_normal = [0.0, 0.0, 1.0]   # unit normal, from the widget (app frame)
+state.oblique_window = mpr.BONE_WINDOW
+state.oblique_level = mpr.BONE_LEVEL
+state.oblique_size_mm = 220.0
+state.oblique_img = ""             # data:image/png;base64,... reformat
+state.oblique_note = (
+    "Research / de-identified — not for diagnostic use. The plane is an "
+    "ARBITRARY tilt in the app frame (array-oriented X/Y/Z or 'oblique') — "
+    "never radiological A/P/S/I or laterality. Drag the 3D plane widget; the "
+    "2D reformat is sampled directly on that plane, matched at every pixel.")
+
 # --- Phase IV: linked compare cross-sections ------------------------------ #
 # A second, independent MPR-style pair (Reference volume / Target volume) shown
 # side by side when compare mode is on. Moving the crosshair on the REFERENCE
@@ -561,6 +586,110 @@ def _mpr_on_plane_index_change(*_a, **_k) -> None:
 
 ctrl.mpr_refresh = _mpr_refresh_images
 ctrl.mpr_reset = _mpr_reset_for_side
+
+
+# --------------------------------------------------------------------------- #
+# Oblique (arbitrary-tilt) cross-section.
+#
+# A pyvista interactive plane widget on the 3D view gives an ARBITRARY
+# (origin, normal) on every drag — not restricted to the three orthogonal
+# planes. The widget callback renders the matching 2D reformat directly via
+# core.viz.slice.render_oblique_png (the SAME function the locked
+# /oblique-slice API endpoint calls), so the 3D cut and the 2D image are
+# matched at every point by construction: the returned meta's basis (u, v)
+# fully defines pixel<->world for that exact plane.
+#
+# Display-only: this NEVER calls core.pipeline / schedules a recompute. The
+# widget survives plotter.clear()/clear_actors() (pyvista keeps widgets across
+# scene rebuilds), so it stays put across Apply/Recompute and display-only
+# recolors; only a side switch or a fresh session re-seeds it.
+# --------------------------------------------------------------------------- #
+OBLIQUE_WIDGET: dict = {"widget": None}
+
+
+def _oblique_render(side: dict, origin, normal) -> None:
+    """Render the oblique reformat for (origin, normal) and push it to state."""
+    png, meta = mpr.render_oblique_png(
+        side["arr"], side["spacing"], side["offset_xyz"], origin, normal,
+        size_mm=float(state.oblique_size_mm), px_mm=1.0, max_dim=384,
+        window=float(state.oblique_window), level=float(state.oblique_level),
+    )
+    import base64
+    with state:
+        state.oblique_available = True
+        state.oblique_origin = [float(x) for x in meta["origin_xyz_mm"]]
+        state.oblique_normal = [float(x) for x in meta["normal"]]
+        state.oblique_img = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    state.flush()
+
+
+def _on_oblique_widget(normal, origin) -> None:
+    """pyvista plane-widget callback: (normal, origin) on every drag/create.
+
+    Display-only — re-renders the 2D reformat ONLY; never touches
+    core.pipeline / the recompute pipeline.
+    """
+    side = _mpr_active_side()
+    if side is None:
+        return
+    try:
+        _oblique_render(side, tuple(float(x) for x in origin), tuple(float(x) for x in normal))
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+def _oblique_reset_for_side(*_a, **_k) -> None:
+    """(Re)seed the plane widget at the active volume side's centre with a
+    non-axis-aligned tilt, and render the initial reformat.
+
+    Called on startup and whenever the active volume side changes (mirrors
+    ``_mpr_reset_for_side``). A bare-mesh session or an unavailable volume
+    disables the panel instead of touching the widget.
+    """
+    side = _mpr_active_side()
+    if side is None:
+        with state:
+            state.oblique_available = False
+        state.flush()
+        return
+    info = mpr.volume_info(side["arr"], side["spacing"], side["offset_xyz"],
+                           side.get("side", state.mpr_side))
+    ext = info["extent_mm"]
+    bounds = (ext["x"][0], ext["x"][1], ext["y"][0], ext["y"][1],
+             ext["z"][0], ext["z"][1])
+    center = ((ext["x"][0] + ext["x"][1]) / 2.0,
+             (ext["y"][0] + ext["y"][1]) / 2.0,
+             (ext["z"][0] + ext["z"][1]) / 2.0)
+    # An arbitrary tilt (not axis-aligned) so the panel visibly demonstrates a
+    # genuine oblique cut rather than a disguised axial/coronal/sagittal one.
+    normal = np.array([0.35, 0.5, 0.79], dtype=np.float64)
+    normal = normal / np.linalg.norm(normal)
+    with state:
+        state.oblique_side = side.get("side", state.mpr_side)
+        state.oblique_window = info["default_window"]
+        state.oblique_level = info["default_level"]
+    state.flush()
+
+    w = OBLIQUE_WIDGET.get("widget")
+    if w is None:
+        w = PLOTTER.add_plane_widget(
+            _on_oblique_widget, normal=tuple(normal), origin=center,
+            bounds=bounds, implicit=True, outline_translation=False,
+        )
+        OBLIQUE_WIDGET["widget"] = w
+    else:
+        try:
+            w.PlaceWidget(bounds)
+            w.SetOrigin(*center)
+            w.SetNormal(*normal)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+    # Render the initial reformat directly (some pyvista/VTK versions do not
+    # re-invoke the callback on a programmatic SetOrigin/SetNormal).
+    _oblique_render(side, center, tuple(normal))
+
+
+ctrl.oblique_reset = _oblique_reset_for_side
 
 
 # --------------------------------------------------------------------------- #
@@ -1231,6 +1360,21 @@ for _k in ("mpr_window", "mpr_level"):
 state.change("side")(_mpr_reset_for_side)
 
 
+def _oblique_refresh_window_level(*_a, **_k) -> None:
+    """Window/level/size changed: re-render the reformat at the CURRENT widget
+    (origin, normal) without touching the plane or the pipeline."""
+    side = _mpr_active_side()
+    if side is None or not state.oblique_available:
+        return
+    _oblique_render(side, tuple(state.oblique_origin), tuple(state.oblique_normal))
+
+
+for _k in ("oblique_window", "oblique_level", "oblique_size_mm"):
+    state.change(_k)(_oblique_refresh_window_level)
+# Switching the thickness side also re-seeds the oblique plane widget.
+state.change("side")(_oblique_reset_for_side)
+
+
 # --------------------------------------------------------------------------- #
 # Export: build a multi-format bundle via core.export.export_bundle and expose
 # each result as a real download link served from /downloads.
@@ -1511,6 +1655,11 @@ with SinglePageWithDrawerLayout(server) as layout:
             v_model=("compare_active",), label="Compare (linked cross-sections)",
             density="compact", hide_details=True, color="primary",
             disabled=("!compare_available",), style="margin-left:16px;flex:none")
+        v3.VSwitch(
+            v_model=("oblique_active", False),
+            label="Oblique cross-section (drag the 3D plane)",
+            density="compact", hide_details=True, color="primary",
+            disabled=("!oblique_available",), style="margin-left:16px;flex:none")
         v3.VSpacer()
         # Share URL (copyable) + switch-to-the-other-UI.
         v3.VTextField(
@@ -1809,7 +1958,7 @@ with SinglePageWithDrawerLayout(server) as layout:
 
                 # ---- MPR column (right): 3 array-oriented slice panels ----- #
                 with html.Div(
-                    v_show="mpr_available && !compare_active",
+                    v_show="mpr_available && !compare_active && !oblique_active",
                     style="flex:0 0 360px;height:100%;overflow-y:auto;"
                           "border-left:1px solid #e0e0e0;background:#0f1116;"
                           "padding:10px 12px;box-sizing:border-box"):
@@ -1870,13 +2019,74 @@ with SinglePageWithDrawerLayout(server) as layout:
                     _mpr_panel("Sagittal (array orientation)", "mpr_img_sagittal",
                                "mpr_idx_sagittal", "mpr_n_sagittal")
 
+                # ---- Oblique column (right): arbitrary-tilt reformat ------- #
+                # Driven by the pyvista plane widget on the 3D view (drag it to
+                # tilt the plane to ANY orientation). The reformat below is
+                # sampled directly on that (origin, normal) via
+                # core.viz.slice.render_oblique_png — matched to the 3D cut at
+                # every pixel by construction. Display-only: no recompute.
+                with html.Div(
+                    v_show="oblique_active",
+                    style="flex:0 0 360px;height:100%;overflow-y:auto;"
+                          "border-left:1px solid #e0e0e0;background:#0f1116;"
+                          "padding:10px 12px;box-sizing:border-box"):
+                    html.Div(
+                        "Oblique reformat — arbitrary tilt",
+                        style="color:#e8e8e8;font-size:13px;font-weight:700;"
+                              "letter-spacing:.02em;margin-bottom:2px")
+                    html.Div(
+                        "Side: {{ oblique_side }} · drag the plane widget in "
+                        "the 3D view to re-orient the cut",
+                        style="color:#9aa0aa;font-size:11px;margin-bottom:6px;"
+                              "line-height:1.4")
+                    html.Div(
+                        "{{ oblique_note }}",
+                        style="color:#c9a227;font-size:10px;margin-bottom:10px;"
+                              "line-height:1.4;border:1px solid #4a3f12;"
+                              "background:#1c1808;border-radius:6px;padding:5px 7px")
+                    html.Div(
+                        "origin ({{ oblique_origin[0].toFixed(1) }}, "
+                        "{{ oblique_origin[1].toFixed(1) }}, "
+                        "{{ oblique_origin[2].toFixed(1) }}) mm · normal "
+                        "({{ oblique_normal[0].toFixed(2) }}, "
+                        "{{ oblique_normal[1].toFixed(2) }}, "
+                        "{{ oblique_normal[2].toFixed(2) }})",
+                        style="color:#7d838c;font-size:10px;margin-bottom:8px")
+
+                    with html.Div(style="margin-bottom:8px"):
+                        v3.VSlider(
+                            v_model=("oblique_window",), label="Window (HU)",
+                            min=1, max=4000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+                        v3.VSlider(
+                            v_model=("oblique_level",), label="Level (HU)",
+                            min=-1000, max=2000, step=1, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+                        v3.VSlider(
+                            v_model=("oblique_size_mm",), label="Field of view (mm)",
+                            min=40, max=400, step=5, thumb_label=True,
+                            density="compact", hide_details=True, color="cyan",
+                            style="color:#cfd3da")
+
+                    html.Img(
+                        src=("oblique_img",), v_if="oblique_img",
+                        style="width:100%;height:auto;display:block;"
+                              "background:#000;border:1px solid #2a2e36;"
+                              "border-radius:5px;image-rendering:pixelated")
+                    html.Div(
+                        "No reformat yet — drag the 3D plane widget.",
+                        v_if="!oblique_img",
+                        style="color:#888;font-size:11px;margin-top:8px")
+
                 # ---- Compare column (right): Phase IV linked cross-sections - #
                 # Reference volume / Target volume panels side by side, driven by
                 # the SAME crosshair math as the Phase III MPR, mapped through the
                 # cached compare_registration 4x4. Shown INSTEAD of the plain MPR
                 # column while compare mode is active (same real estate).
                 with html.Div(
-                    v_show="compare_active",
+                    v_show="compare_active && !oblique_active",
                     style="flex:0 0 640px;height:100%;overflow-y:auto;"
                           "border-left:1px solid #e0e0e0;background:#0f1116;"
                           "padding:10px 12px;box-sizing:border-box"):

@@ -24,6 +24,7 @@ import vtkAxesActor from '@kitware/vtk.js/Rendering/Core/AxesActor';
 import vtkOrientationMarkerWidget from '@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget';
 import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
 import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
+import vtkPlaneSource from '@kitware/vtk.js/Filters/Sources/PlaneSource';
 
 import { fetchGeometryArrayBuffer } from './api';
 import { buildDiscreteLUT } from './colors';
@@ -86,7 +87,11 @@ function scalarAtPickedCell(polydata, scalarName, cellId, pos) {
 //   clicks the surface (used to drive the MPR crosshair via pick-to-slices).
 // `marker` — { x, y, z } world position for a small sphere marker (the linked
 //   crosshair point), or null to hide it.
-export default function Viewport({ geometry, onHover, cameraPose, onPick, marker }) {
+// `plane` — { origin:[x,y,z], normal:[x,y,z], sizeMm } for the Phase VII
+//   arbitrary-cross-section widget: draws a translucent square plane actor at
+//   that origin/normal so the user sees exactly what the 2D oblique reformat
+//   is cutting. Omit / null to hide it (unused by the other center views).
+export default function Viewport({ geometry, onHover, cameraPose, onPick, marker, plane }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
   const onHoverRef = useRef(onHover);
@@ -149,6 +154,8 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
       lastUrl: null,
       markerActor: null,
       markerSource: null,
+      planeActor: null,
+      planeSource: null,
     };
 
     // ---- linked-crosshair marker (a small red sphere) ----------------------
@@ -169,6 +176,25 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
     renderer.addActor(markerActor);
     contextRef.current.markerActor = markerActor;
     contextRef.current.markerSource = markerSource;
+
+    // ---- oblique cutting-plane actor (Phase VII) ---------------------------
+    // A translucent square centred at the plane origin, oriented by the plane
+    // normal — shows exactly what the 2D oblique panel is sampling. Hidden
+    // until a `plane` prop is supplied (only used by the 'oblique' center view).
+    const planeSource = vtkPlaneSource.newInstance({ xResolution: 1, yResolution: 1 });
+    const planeMapper = vtkMapper.newInstance();
+    planeMapper.setInputConnection(planeSource.getOutputPort());
+    const planeActor = vtkActor.newInstance();
+    planeActor.setMapper(planeMapper);
+    planeActor.getProperty().setColor(0.25, 0.55, 0.95);
+    planeActor.getProperty().setOpacity(0.35);
+    planeActor.getProperty().setAmbient(0.6);
+    planeActor.getProperty().setBackfaceCulling(false);
+    planeActor.getProperty().setFrontfaceCulling(false);
+    planeActor.setVisibility(false);
+    renderer.addActor(planeActor);
+    contextRef.current.planeActor = planeActor;
+    contextRef.current.planeSource = planeSource;
 
     // ---- hover picking ------------------------------------------------------
     const el = containerRef.current;
@@ -383,6 +409,51 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
     }
     ctx.renderWindow?.render();
   }, [marker?.x, marker?.y, marker?.z]);
+
+  // ---- move / show / hide the oblique cutting-plane actor ------------------
+  // Builds an in-plane basis (u, v) from the normal the same way the server's
+  // plane_basis() does (arbitrary "up" hint, orthogonalised), purely for
+  // drawing — the actual 2D reformat's exact basis comes back from the API in
+  // its own `meta.u` / `meta.v` and is used by ObliqueView for pixel<->world,
+  // never approximated here.
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.planeActor || !ctx.planeSource) return;
+    if (plane && Array.isArray(plane.origin) && Array.isArray(plane.normal)) {
+      const [nx, ny, nz] = plane.normal;
+      const nLen = Math.hypot(nx, ny, nz) || 1;
+      const n = [nx / nLen, ny / nLen, nz / nLen];
+      const upHint = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
+      const dot = n[0] * upHint[0] + n[1] * upHint[1] + n[2] * upHint[2];
+      let u = [upHint[0] - dot * n[0], upHint[1] - dot * n[1], upHint[2] - dot * n[2]];
+      const uLen = Math.hypot(...u) || 1;
+      u = [u[0] / uLen, u[1] / uLen, u[2] / uLen];
+      const v = [
+        n[1] * u[2] - n[2] * u[1],
+        n[2] * u[0] - n[0] * u[2],
+        n[0] * u[1] - n[1] * u[0],
+      ];
+      const half = (plane.sizeMm ?? 200) / 2;
+      const [ox, oy, oz] = plane.origin;
+      // PlaneSource: origin + point1 (defines one edge) + point2 (defines the
+      // other edge); the actor's quad spans origin..point1 x origin..point2.
+      ctx.planeSource.setOrigin(ox - u[0] * half - v[0] * half, oy - u[1] * half - v[1] * half, oz - u[2] * half - v[2] * half);
+      ctx.planeSource.setPoint1(ox + u[0] * half - v[0] * half, oy + u[1] * half - v[1] * half, oz + u[2] * half - v[2] * half);
+      ctx.planeSource.setPoint2(ox - u[0] * half + v[0] * half, oy - u[1] * half + v[1] * half, oz - u[2] * half + v[2] * half);
+      ctx.planeActor.setVisibility(true);
+    } else {
+      ctx.planeActor.setVisibility(false);
+    }
+    ctx.renderWindow?.render();
+  }, [
+    plane?.origin?.[0],
+    plane?.origin?.[1],
+    plane?.origin?.[2],
+    plane?.normal?.[0],
+    plane?.normal?.[1],
+    plane?.normal?.[2],
+    plane?.sizeMm,
+  ]);
 
   return (
     <div

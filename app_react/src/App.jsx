@@ -32,6 +32,7 @@ import ControlPanel from './ControlPanel';
 import Viewport from './Viewport';
 import MPRViewer from './mpr/MPRViewer';
 import CompareView from './CompareView';
+import ObliqueView from './ObliqueView';
 import ArModal from './ArModal';
 import Legend from './Legend';
 import StatsPanel from './StatsPanel';
@@ -83,9 +84,10 @@ export default function App() {
   const [hover, setHover] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
-  // Center-area toggle between the 3D map, the linked MPR slices, and the
-  // linked compare cross-sections (Phase IV).
-  const [centerView, setCenterView] = useState('map'); // 'map' | 'images' | 'compare'
+  // Center-area toggle between the 3D map, the linked MPR slices, the linked
+  // compare cross-sections (Phase IV), and the arbitrary oblique cross-section
+  // (Phase VII).
+  const [centerView, setCenterView] = useState('map'); // 'map' | 'images' | 'compare' | 'oblique'
   // AR / 3D modal (Phase V).
   const [arOpen, setArOpen] = useState(false);
   // A 3D-pick crosshair pushed into the MPR (voxel {ix,iy,iz}); bumped so the
@@ -94,6 +96,9 @@ export default function App() {
   // World point of the linked crosshair -> the 3D sphere marker. Set both by a
   // 3D pick and by MPR scrubbing/clicking (voxel->world from volume-info).
   const [marker, setMarker] = useState(null); // { x, y, z } | null
+  // The current oblique plane { origin:[x,y,z], normal:[x,y,z], sizeMm } pushed
+  // up by ObliqueView so the 3D Viewport can draw the matching translucent cut.
+  const [obliquePlane, setObliquePlane] = useState(null);
 
   // Compute state + last results.
   const [computing, setComputing] = useState(false);
@@ -165,6 +170,8 @@ export default function App() {
     setComputeError(null);
     setExportFiles(null);
     setExportError(null);
+    setMarker(null);
+    setObliquePlane(null);
   }
 
   // Controls shown for the active mode (mode-specific + 'both'). We keep EVERY
@@ -373,6 +380,13 @@ export default function App() {
   // MPR scrub/click -> move the 3D marker (voxel already converted to world by
   // the MPR from volume-info, so no server round-trip).
   const onMprCrosshair = (_vox, world) => {
+    setMarker({ x: world[0], y: world[1], z: world[2] });
+  };
+
+  // Oblique 2D panel click -> move the 3D marker (world point computed
+  // CLIENT-SIDE, exactly, from the returned oblique-slice meta — see
+  // ObliqueView/obliquePixelToWorld — no server round-trip needed).
+  const onObliquePixelPick = (world) => {
     setMarker({ x: world[0], y: world[1], z: world[2] });
   };
 
@@ -752,9 +766,9 @@ export default function App() {
         />
 
         <main
-          className={`center${centerView === 'images' ? ' center-split' : ''}${
-            centerView === 'compare' ? ' center-compare' : ''
-          }`}
+          className={`center${
+            centerView === 'images' || centerView === 'oblique' ? ' center-split' : ''
+          }${centerView === 'compare' ? ' center-compare' : ''}`}
         >
           <div className="center-toolbar">
             <div className="center-toggle" role="group" aria-label="Center view">
@@ -787,6 +801,18 @@ export default function App() {
                 }
               >
                 Compare
+              </button>
+              <button
+                className={centerView === 'oblique' ? 'active' : ''}
+                onClick={() => setCenterView('oblique')}
+                disabled={!mprSide}
+                title={
+                  mprSide
+                    ? 'Arbitrary tiltable cutting plane, matched live to a 2D reformat'
+                    : 'A mesh upload has no volume to slice'
+                }
+              >
+                Oblique
               </button>
             </div>
             <button
@@ -832,6 +858,7 @@ export default function App() {
             cameraPose={camera}
             onPick={onSurfacePick}
             marker={marker}
+            plane={centerView === 'oblique' ? obliquePlane : null}
           />
 
           {displayGeometry && (
@@ -926,6 +953,28 @@ export default function App() {
                   <div className="mpr-empty-body">
                     This session is a mesh upload — the MPR viewer needs a CT
                     volume. Load a scan to see linked slices.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {centerView === 'oblique' && (
+            <div className="mpr-column">
+              {mprSide ? (
+                <ObliqueView
+                  sessionId={session.session_id}
+                  side={mprSide}
+                  pickedWorld={marker}
+                  onPlaneChange={setObliquePlane}
+                  onPixelPick={onObliquePixelPick}
+                />
+              ) : (
+                <div className="mpr-wrap mpr-empty">
+                  <div className="mpr-empty-title">No volume to slice</div>
+                  <div className="mpr-empty-body">
+                    This session is a mesh upload — the oblique reformat needs
+                    a CT volume. Load a scan to see the matched cross-section.
                   </div>
                 </div>
               )}

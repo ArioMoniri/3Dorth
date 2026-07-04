@@ -39,8 +39,23 @@ All notable changes to this project are documented here. The format follows
   survives sleep/wake; the panel polls `/api/config` for the live URL).
 - Bounded RAM/compute (`core/resources`): int16 volumes, adaptive resolution,
   serialized computes, LRU session eviction, optional GPU (CuPy) — env-tunable.
-- Designed (not yet shipped): in-panel MPR image viewer, matched-cross-section
-  compare (gated on registration quality), and AR (GLB / WebXR).
+- **Imaging viewer + cross-sections + AR** (shipped, both frontends; slice-on-demand
+  so the volume never leaves the server — RAM-bounded):
+  - MPR viewer (`core/viz/slice`, `/volume-info` · `/slice` · `/pick-to-slices`):
+    axial/coronal/sagittal panels with a linked crosshair; 3D pick ↔ slices.
+  - Oblique / arbitrary cross-section (`core/viz/slice.oblique_slice`,
+    `/oblique-slice`): sample any plane (origin + normal) with an exact
+    pixel↔world inverse, so the 3D cut and the 2D reformat match at every point,
+    for any tilt — a tiltable cut-plane widget drives a live reformat in both UIs.
+  - Compare matched cross-sections (`pipeline.compare_registration`,
+    `/compare-slice-map`): registers two sides once, maps a crosshair across
+    volumes, **gated on `inlier_fraction ≥ 0.30`** — a low-overlap alignment is
+    flagged unreliable, never silently trusted.
+  - AR: GLB export (`core/export/mesh` per-vertex colour bake + triangle cap,
+    `/model.glb`), `<model-viewer>` (Android Scene Viewer), and a three.js WebXR
+    clipping-plane cross-section with a feature-detected graceful fallback.
+  - All image panels are array-oriented (never radiological) with the
+    research/de-identified/not-for-diagnosis caveat kept visible.
 
 ### Changed
 - Colormap selection now applies live in the React viewport and legend

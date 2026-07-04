@@ -50,6 +50,34 @@ Everything is interactive and applies in real time:
 - **Share** a public link (a resilient Cloudflare tunnel that survives sleep/wake)
   and **switch between the two UIs** from either one.
 
+### See the images, not just the surface
+
+Beside the 3D map, an image viewer slices the actual CT — the volume never leaves
+the server (it streams small windowed PNGs on demand, so RAM stays bounded).
+
+![Arbitrary oblique cross-section — a tiltable cutting plane through the 3D
+thickness map with its matched 2D reformat](docs/assets/ui_react_oblique.png)
+<sub>A freely tiltable cutting plane (left) and its live 2D reformat (right),
+matched at every point — click the reformat and the 3D marker lands exactly there.</sub>
+
+- **MPR** — axial / coronal / sagittal panels with a linked crosshair; click the
+  3D bone and all three slices jump to that point, scrub a slice and the 3D marker
+  follows.
+- **Oblique / any cross-section** — tilt a cutting plane to *any* orientation and
+  the 2D reformat is matched to the 3D cut **at every point** (click the reformat,
+  the 3D marker lands exactly there).
+- **Compare** two registered sides' matched cross-sections side by side — and the
+  linkage is **gated on registration quality**: a low-overlap alignment (e.g. a
+  thorax-fused bone) is flagged unreliable, never silently trusted.
+- **AR / 3D** — view the coloured bone in-browser (`<model-viewer>`), launch native
+  AR on Android (glTF/Scene Viewer), or scrub a clipping-plane cross-section in a
+  three.js view with a real WebXR session where the device supports it.
+
+Every image panel is labelled **array-oriented** (the app frame is
+`world = index × spacing + offset`, identity direction — the DICOM origin/direction
+are not carried through), so it never claims a radiological A/P/S/I orientation, and
+the research / de-identified / not-for-diagnosis caveat stays visible.
+
 ## Get it running
 
 Docker and the Compose plugin are all you need on the server:
@@ -219,22 +247,28 @@ during compute.
 
 </details>
 
-## Roadmap
+## Imaging viewer, cross-sections & AR
 
 Reviewed and designed (`docs/IMAGING_DESIGN_clinical.md`,
-`docs/IMAGING_DESIGN_technical.md`), implementation in progress:
+`docs/IMAGING_DESIGN_technical.md`), now shipped in both frontends (see
+[`GOAL_IMAGING.md`](GOAL_IMAGING.md) / [`WATCHDOG.md`](WATCHDOG.md) for the phase
+gates and how each was verified):
 
-- An in-panel **image viewer** — axial/coronal/sagittal slices beside the 3D map,
-  with a crosshair linking a point on the surface to the slices. Slices are
-  rendered on demand by the API, so the whole volume never goes to the browser.
-- **Compare** two series' matched cross-sections side by side, gated on
+- ✅ In-panel **image viewer** (MPR) — axial/coronal/sagittal slices beside the 3D
+  map with a linked crosshair. Slices render on demand by the API, so the whole
+  volume never goes to the browser.
+- ✅ **Oblique / arbitrary cross-section** — a tiltable cutting plane at any
+  orientation with a live reformat matched to the 3D cut at every point (exact
+  pixel↔world inverse, so a click on the 2D image lands on the precise 3D point).
+- ✅ **Compare** two series' matched cross-sections side by side, gated on
   registration quality so it never implies a correspondence the fit can't support.
-- **AR** — export a GLB to view the bone on a phone (native AR), with a WebXR
-  cross-section prototype where the device supports it.
+- ✅ **AR** — a GLB of the coloured bone for native AR on Android and a three.js
+  WebXR clipping-plane cross-section where the device supports it (graceful,
+  feature-detected fallback everywhere else).
 
 Per the review: measurement stays on the source geometry (never on a reformatted
-slice), orientation and laterality are derived from the data or shown as
-unverified (never guessed), and AR is for education/consent, not measurement.
+slice), orientation and laterality are shown as array-oriented / unverified (never
+guessed), and AR is for education/consent, not measurement.
 
 ## Contributing, changelog, license
 
