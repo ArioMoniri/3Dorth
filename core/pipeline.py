@@ -134,7 +134,8 @@ def detect_bilateral(arr: np.ndarray, spacing: tuple,
     return central_ratio <= (1.0 - gap_fraction) or central_ratio < 0.85
 
 
-def split_sides(arr: np.ndarray, spacing: tuple, margin_mm: float = 12.0) -> dict:
+def split_sides(arr: np.ndarray, spacing: tuple, margin_mm: float = 12.0,
+                layout: str = "auto") -> dict:
     """Split a scan into per-side sub-volumes, auto-detecting bilateral vs single.
 
     For a **bilateral** scan (bone on both sides of the x-midline) this returns
@@ -151,7 +152,11 @@ def split_sides(arr: np.ndarray, spacing: tuple, margin_mm: float = 12.0) -> dic
     sx = spacing[0]
     nx = arr.shape[2]
 
-    if not detect_bilateral(arr, spacing):
+    # layout: "auto" uses the geometric detector; "bilateral"/"single" force it
+    # (a bilateral limb CT whose thoracic skeleton fills the midline defeats the
+    # auto gap test, so the caller/UI can override).
+    bilateral = layout == "bilateral" or (layout == "auto" and detect_bilateral(arr, spacing))
+    if not bilateral:
         return {
             "full": {"arr": np.ascontiguousarray(arr), "spacing": spacing,
                      "offset_xyz": (0.0, 0.0, 0.0), "side": "full"},

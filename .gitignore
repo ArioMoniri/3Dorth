@@ -9,6 +9,10 @@ dicom/
 DICOM/
 *.nii
 *.nii.gz
+# Exception: the de-identified demo (NIfTI has no DICOM patient tags) is shipped
+# so every user has something to try. Built by scripts/make_demo.py.
+!data/demo/
+!data/demo/shoulder_demo.nii.gz
 
 # ---- Large derived artifacts ----
 outputs/

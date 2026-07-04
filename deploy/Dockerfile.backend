@@ -21,6 +21,8 @@ COPY core ./core
 COPY api ./api
 COPY app_trame ./app_trame
 COPY config.yaml ./
+# De-identified demo (NIfTI, PHI-free) so a fresh server has something to show.
+COPY data/demo ./data/demo
 
 RUN useradd -m appuser && mkdir -p outputs/sessions data/raw && chown -R appuser /app
 USER appuser

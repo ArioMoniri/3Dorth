@@ -28,8 +28,14 @@ CACHE = ROOT / "outputs" / "sessions"
 CACHE.mkdir(parents=True, exist_ok=True)
 EXPORTS = ROOT / "outputs" / "exports"
 EXPORTS.mkdir(parents=True, exist_ok=True)
-_DEMO = next((ROOT / "Bilateral Omuz BT Jul 4 2026").glob("*.zip"), None) if \
+# Prefer the shipped, DE-IDENTIFIED demo (NIfTI carries no patient tags) so every
+# user — including on a public server — gets a demo with no patient information.
+# Fall back to the local raw patient archive only if the de-identified demo is
+# absent (developer machine before running scripts/make_demo.py).
+_DEIDENTIFIED_DEMO = ROOT / "data" / "demo" / "shoulder_demo.nii.gz"
+_PATIENT_DEMO = next((ROOT / "Bilateral Omuz BT Jul 4 2026").glob("*.zip"), None) if \
     (ROOT / "Bilateral Omuz BT Jul 4 2026").exists() else None
+_DEMO = _DEIDENTIFIED_DEMO if _DEIDENTIFIED_DEMO.exists() else _PATIENT_DEMO
 
 # In-memory sessions: sid -> {arr, spacing, meta, sides}
 SESSIONS: dict[str, dict] = {}
@@ -73,9 +79,9 @@ def _params(d: dict) -> "P.Parameters":
         raise HTTPException(422, f"invalid parameters: {e}")
 
 
-def _new_session(arr, spacing, meta) -> dict:
+def _new_session(arr, spacing, meta, layout: str = "auto") -> dict:
     sid = uuid.uuid4().hex[:12]
-    sides = pipeline.split_sides(arr, spacing)
+    sides = pipeline.split_sides(arr, spacing, layout=layout)
     SESSIONS[sid] = {"arr": arr, "spacing": spacing, "meta": meta, "sides": sides}
     return {"session_id": sid, "meta": meta, "sides": list(sides.keys()),
             "is_bilateral": set(sides.keys()) == {"left", "right"}}
@@ -92,12 +98,17 @@ def _new_mesh_session(mesh, meta) -> dict:
 
 
 @router.post("/session")
-def create_session() -> dict:
-    """Create a session from the bundled demo scan (no request body needed)."""
+def create_session(layout: str = "bilateral") -> dict:
+    """Create a session from the bundled de-identified demo scan.
+
+    The demo is a bilateral shoulder CT, so ``layout='bilateral'`` by default
+    (the thoracic skeleton fills the midline and defeats auto gap-detection);
+    pass ``?layout=auto`` or ``?layout=single`` to override.
+    """
     if _DEMO is None:
         raise HTTPException(404, "no demo scan present")
     arr, spacing, meta = pipeline.load_volume_from_source(_DEMO, WORKDIR)
-    return _new_session(arr, spacing, meta)
+    return _new_session(arr, spacing, meta, layout=layout)
 
 
 def _accepted_suffix(name: str) -> str | None:
