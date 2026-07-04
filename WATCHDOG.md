@@ -61,6 +61,17 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 - A gate flips to ✅ only when its named verification actually executes green.
 - On any red, downstream phases stay ⬜ — no building on an unverified base.
 
+## Imaging viewer + cross-section + AR (new phase — see GOAL_IMAGING.md)
+| Phase | Gate | Status |
+|---|---|---|
+| I Design | clinical + technical design docs; coherent RAM-bounded API contract | 🟡 in progress |
+| II Slice backend | `/api/session/{sid}/slice` MPR PNG; world↔voxel map; memory bounded | ⬜ |
+| III MPR viewer (both UIs) | 3 planes + 3D, movable crosshair, parity | ⬜ |
+| IV Compare | two registered MPR viewers, matched cross-section | ⬜ |
+| V AR MVP | valid GLB opens in native mobile AR | ⬜ |
+| VI AR/WebXR | in-AR clipping-plane cross-section (device-gated) | ⬜ |
+- Honest scope: not a full OHIF embed (light vtk.js MPR + slice-on-demand); AR MVP via GLB/model-viewer; WebXR cross-section is device-limited and clearly caveated.
+
 ## Progress log — full-build sweep
 - **Phase 2 measurement** ✅ `core/measurement` (Fig-2 line + height/valid-height); 8 tests.
 - **Phase 3 registration** ✅ `core/registration` (FPFH+RANSAC→ICP, PCA fallback, mirror); 9 tests recover known transforms.
