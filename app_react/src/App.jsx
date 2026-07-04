@@ -38,7 +38,9 @@ import Legend from './Legend';
 import StatsPanel from './StatsPanel';
 import ShareSwitch from './ShareSwitch';
 import HoverTooltip from './HoverTooltip';
+import ClipPanel from './ClipPanel';
 import { buildManualTransform } from './ManualAnchor';
+import { computeMaskedStats } from './clipStats';
 
 const ZERO_NUDGE = { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 };
 const DEFAULT_CAMERA = { azimuth: 0, elevation: 0, roll: 0, zoom: 1 };
@@ -82,6 +84,23 @@ export default function App() {
 
   // Hover tooltip.
   const [hover, setHover] = useState(null);
+
+  // The active scalar's full per-vertex array (thickness_mm or deviation_mm),
+  // read straight from the loaded polydata by Viewport — powers the Stats
+  // panel distribution histogram with no extra API call.
+  const [scalarValues, setScalarValues] = useState(null);
+
+  // ---- clip / isolate (Feature 3) -------------------------------------------
+  // `meshBounds` — [xmin,xmax,ymin,ymax,zmin,zmax] of the CURRENTLY loaded
+  // geometry, reported by Viewport straight from the parsed polydata.
+  // `clipEnabled` — the toggle. `clipBox` — the adjustable box (same 6-tuple
+  // shape as an object); null while the toggle is off (whole mesh visible).
+  // `visibleMask` — Uint8Array (1 = inside the box), reported by Viewport, same
+  // order as `scalarValues` — lets us recompute stats for just the seen part.
+  const [meshBounds, setMeshBounds] = useState(null);
+  const [clipEnabled, setClipEnabled] = useState(false);
+  const [clipBox, setClipBox] = useState(null);
+  const [visibleMask, setVisibleMask] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
   // Center-area toggle between the 3D map, the linked MPR slices, the linked
@@ -172,6 +191,14 @@ export default function App() {
     setExportError(null);
     setMarker(null);
     setObliquePlane(null);
+    setScalarValues(null);
+    // A fresh scan/mesh invalidates the previous clip box (different geometry
+    // extent) — the "Reset clip" bounds re-seed from the new mesh's own bounds
+    // once Viewport reports them.
+    setMeshBounds(null);
+    setClipEnabled(false);
+    setClipBox(null);
+    setVisibleMask(null);
   }
 
   // Controls shown for the active mode (mode-specific + 'both'). We keep EVERY
@@ -619,6 +646,62 @@ export default function App() {
     setGeometry({ url: res.geometry_url, scalar: res.scalar });
   }
 
+  // ---- clip / isolate (Feature 3) -------------------------------------------
+  // Viewport reports the freshly-loaded polydata's real bounds every time the
+  // geometry URL changes (a recompute always produces a new mesh). We track
+  // the bounds so ClipPanel can seed its sliders, and if a clip box is already
+  // active we RE-SEED it to the new mesh's bounds too (a stale box from a
+  // previous, differently-sized mesh would clip nonsensically).
+  const lastBoundsUrlRef = useRef(null);
+  function onViewportBounds(b) {
+    if (!b) return;
+    const [xmin, xmax, ymin, ymax, zmin, zmax] = b;
+    setMeshBounds(b);
+    if (lastBoundsUrlRef.current !== geometry?.url) {
+      lastBoundsUrlRef.current = geometry?.url;
+      if (clipEnabled) {
+        setClipBox({ xmin, xmax, ymin, ymax, zmin, zmax });
+      }
+    }
+  }
+
+  function onToggleClip(next) {
+    setClipEnabled(next);
+    if (next && meshBounds) {
+      const [xmin, xmax, ymin, ymax, zmin, zmax] = meshBounds;
+      setClipBox((prev) => prev || { xmin, xmax, ymin, ymax, zmin, zmax });
+    } else if (!next) {
+      setClipBox(null);
+      setVisibleMask(null);
+    }
+  }
+
+  function onResetClip() {
+    if (!meshBounds) return;
+    const [xmin, xmax, ymin, ymax, zmin, zmax] = meshBounds;
+    setClipBox({ xmin, xmax, ymin, ymax, zmin, zmax });
+  }
+
+  const totalVertexCount = scalarValues ? scalarValues.length : null;
+  const visibleVertexCount = useMemo(() => {
+    if (!visibleMask) return null;
+    let c = 0;
+    for (let i = 0; i < visibleMask.length; i += 1) if (visibleMask[i]) c += 1;
+    return c;
+  }, [visibleMask]);
+  const visiblePct =
+    Number.isFinite(visibleVertexCount) && Number.isFinite(totalVertexCount) && totalVertexCount > 0
+      ? (visibleVertexCount / totalVertexCount) * 100
+      : null;
+
+  // The "Visible part (clipped)" stats block: same shape as the server's stats
+  // dict, computed client-side over ONLY the vertices inside the current clip
+  // box, from the same per-vertex scalar array already on the loaded surface.
+  const clipStats = useMemo(() => {
+    if (!clipEnabled || !clipBox || !visibleMask || !scalarValues) return null;
+    return computeMaskedStats(scalarValues, visibleMask);
+  }, [clipEnabled, clipBox, visibleMask, scalarValues]);
+
   // Layer the DISPLAY-ONLY coloring (recompute=false params) on top of the
   // server geometry, replicating the server's own scalar_range / steps math
   // (see api/routers/session.py) so the client-side legend and LUT match a
@@ -817,6 +900,19 @@ export default function App() {
             </div>
             <button
               type="button"
+              className={`clip-toggle-btn${clipEnabled ? ' active' : ''}`}
+              onClick={() => onToggleClip(!clipEnabled)}
+              disabled={!displayGeometry || centerView !== 'map'}
+              title={
+                displayGeometry
+                  ? 'Isolate a sub-part with an adjustable clip box; stats recompute for the visible part'
+                  : 'Compute a thickness or deviation map first'
+              }
+            >
+              {clipEnabled ? 'Clip: On' : 'Clip / isolate'}
+            </button>
+            <button
+              type="button"
               className="ar-launch-btn"
               onClick={() => setArOpen(true)}
               disabled={!displayGeometry}
@@ -859,6 +955,10 @@ export default function App() {
             onPick={onSurfacePick}
             marker={marker}
             plane={centerView === 'oblique' ? obliquePlane : null}
+            onScalarData={setScalarValues}
+            clipBox={clipEnabled ? clipBox : null}
+            onBounds={onViewportBounds}
+            onVisibleMask={setVisibleMask}
           />
 
           {displayGeometry && (
@@ -866,7 +966,24 @@ export default function App() {
               hover={hover}
               scalar={displayGeometry.scalar}
               mean={activeMean}
+              scalarNames={isDeviationView ? deviationResult?.hover_scalars : null}
             />
+          )}
+
+          {clipEnabled && displayGeometry && (
+            <div className="left-overlay">
+              <ClipPanel
+                bounds={meshBounds}
+                box={clipBox}
+                enabled={clipEnabled}
+                onToggle={onToggleClip}
+                onBoxChange={setClipBox}
+                onReset={onResetClip}
+                visibleCount={visibleVertexCount}
+                totalCount={totalVertexCount}
+                visiblePct={visiblePct}
+              />
+            </div>
           )}
 
           {!displayGeometry && !computing && (
@@ -931,9 +1048,29 @@ export default function App() {
               />
             )}
             {isDeviationView ? (
-              <StatsPanel kind="deviation" result={deviationResult} />
+              <StatsPanel
+                kind="deviation"
+                result={deviationResult}
+                scalarValues={scalarValues}
+                unit="mm"
+                clipStats={clipStats}
+                visibleMask={visibleMask}
+                visibleCount={visibleVertexCount}
+                totalCount={totalVertexCount}
+                visiblePct={visiblePct}
+              />
             ) : (
-              <StatsPanel kind="thickness" result={thicknessResult} />
+              <StatsPanel
+                kind="thickness"
+                result={thicknessResult}
+                scalarValues={scalarValues}
+                unit="mm"
+                clipStats={clipStats}
+                visibleMask={visibleMask}
+                visibleCount={visibleVertexCount}
+                totalCount={totalVertexCount}
+                visiblePct={visiblePct}
+              />
             )}
           </div>
         </div>

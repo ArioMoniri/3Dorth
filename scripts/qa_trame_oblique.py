@@ -68,12 +68,26 @@ def _decode_oblique_panel() -> bytes:
 
 def main() -> None:
     # --- 1. Load the demo and point oblique mode at the LEFT side. ------------
+    # This script targets the SINGLE-PANEL oblique path specifically (the
+    # widget/render/parity/lifecycle guarantees for one volume side in
+    # isolation); the bilateral two-box oblique-compare path is covered by
+    # scripts/qa_trame_oblique_compare.py. The demo dataset is bilateral
+    # (left+right), so — exactly as scripts/qa_trame_oblique_compare.py's
+    # step 7 does for its single-sided-fallback check — restrict the live
+    # session to one volume side first, so _oblique_bilateral_sides() sees
+    # fewer than two sides and _oblique_reset_for_side()/_on_oblique_widget
+    # take the single-panel branch this script exercises.
     if app.DEMO_ZIP is None:
         raise SystemExit("No demo dataset found; cannot run oblique QA.")
     app._load_source(app.DEMO_ZIP, layout="bilateral")
     with app.state:
         app._refresh_session_ui()
     app.state.side = "left"
+    with app._LOCK:
+        for _k in list(app.SESSION["sides"].keys()):
+            if _k != "left":
+                del app.SESSION["sides"][_k]
+    assert app._oblique_bilateral_sides() is None, "expected a single-sided session for this QA script"
     app._oblique_reset_for_side()
 
     assert app.state.oblique_available, "oblique panel not available for the demo left side"

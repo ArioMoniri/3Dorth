@@ -402,6 +402,16 @@ body {
   backdrop-filter: blur(2px);
 }
 
+/* ---- left overlay column (clip / isolate panel) -------------------------- */
+.left-overlay {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 5;
+  max-height: calc(100% - 36px);
+  overflow-y: auto;
+}
+
 .legend-title {
   font-size: 12px;
   font-weight: 600;
@@ -769,6 +779,34 @@ body {
   color: var(--text-muted);
 }
 
+/* ---- stats histogram (distribution of the active scalar) ----------------- */
+.stats-hist {
+  width: 100%;
+}
+
+.stats-hist-svg {
+  width: 100%;
+  height: 84px;
+  display: block;
+  margin-top: 2px;
+}
+
+.stats-hist-bar {
+  fill: var(--accent-2);
+  opacity: 0.85;
+}
+
+.stats-hist-mean {
+  stroke: #e0673a;
+  stroke-width: 1.25;
+  stroke-dasharray: 3 2;
+}
+
+.stats-hist-label {
+  font-size: 8.5px;
+  fill: var(--text-muted);
+}
+
 /* ---- states -------------------------------------------------------------- */
 .loading,
 .fatal {
@@ -1127,6 +1165,32 @@ body {
   opacity: 0.72;
 }
 
+.hover-tip-bones {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hover-tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.hover-tip-row span:first-child {
+  opacity: 0.75;
+}
+
+.hover-tip-row span:last-child {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ===== Center area: 3D map + MPR image viewer ============================ */
 /* The center column holds a small toolbar (map / images toggle) above the
    viewport. When "Images" is on, the map and the MPR sit side by side. */
@@ -1189,6 +1253,42 @@ body {
 }
 .center-split .center-body > .viewport-wrap {
   flex: 1 1 50%;
+}
+
+/* In the split views (Images / Oblique / Compare) the 3D map is only the left
+   half, so the legend+stats overlay's `right: 18px` would land mid-screen ON the
+   bone. Dock it as a compact, translucent card in the BOTTOM-LEFT corner (over the
+   tapering shaft, clear of the thin-cortex head) and keep the clip panel top-left,
+   so neither floats over the middle of the model. */
+.center-split .right-overlay,
+.center-compare .right-overlay {
+  left: 12px;
+  right: auto;
+  top: auto;
+  bottom: 12px;
+  align-items: flex-start;
+  max-width: 232px;
+  max-height: calc(100% - 24px);
+}
+.center-split .right-overlay .legend,
+.center-compare .right-overlay .legend,
+.center-split .right-overlay .stats-card,
+.center-compare .right-overlay .stats-card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(4px);
+  max-width: 232px;
+}
+/* Keep the distribution histogram short in the split card so it stays compact. */
+.center-split .right-overlay .stats-hist,
+.center-compare .right-overlay .stats-hist {
+  height: 48px;
+}
+.center-split .left-overlay,
+.center-compare .left-overlay {
+  top: 12px;
+  bottom: auto;
+  left: 12px;
+  max-width: 232px;
 }
 
 .mpr-column {
@@ -1550,9 +1650,34 @@ body {
   flex: 0 0 auto;
 }
 
+/* ===== Feature 3: clip / isolate toolbar toggle ============================ */
+.clip-toggle-btn {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.clip-toggle-btn:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: #f2f2f5;
+}
+.clip-toggle-btn:not(:disabled):hover {
+  background: #eef0fa;
+  border-color: var(--accent-2);
+}
+.clip-toggle-btn.active {
+  background: var(--accent-2);
+  color: #fff;
+  border-color: var(--accent-2);
+}
+
 /* ===== Phase V: View in AR / 3D ============================================ */
 .ar-launch-btn {
-  margin-left: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
@@ -1781,4 +1906,190 @@ body {
   color: #9a9aa8;
   background: #0c0c10;
   border-top: 1px solid #26262e;
+}
+
+/* ===== Feature 3: clip / isolate panel + split "Whole vs Visible" stats ==== */
+.clip-panel {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 220px;
+  max-width: 260px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+.clip-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.clip-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-2);
+}
+
+.clip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.clip-toggle input {
+  accent-color: var(--accent-2);
+}
+
+.clip-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.clip-axis {
+  padding-top: 6px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.clip-axis:first-of-type {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.clip-axis-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.clip-slider-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 48px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.clip-slider-tag {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.clip-slider-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent-2);
+}
+
+.clip-slider-val {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+}
+
+.clip-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.clip-readout-pct {
+  font-weight: 700;
+  color: var(--accent-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.clip-reset-btn {
+  width: 100%;
+  margin-top: 8px;
+  text-align: center;
+}
+
+/* ---- stats panel: "Whole" vs "Visible part (clipped)" split columns ------ */
+.stat-row-split {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+}
+.stat-row-split .stat-val {
+  text-align: right;
+}
+.stat-val-clip {
+  color: var(--accent-2);
+}
+
+.stat-row-head {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.stat-col-head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  text-align: right;
+}
+.stat-col-head-clip {
+  color: var(--accent-2);
+}
+.stat-col-head-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+/* ---- histogram overlay: visible-part bars on top of the whole-mesh ones -- */
+.stats-hist-bar-overlay {
+  fill: #e0673a;
+  opacity: 0.7;
+}
+.stats-hist-mean-overlay {
+  stroke: #3a3f7a;
+  stroke-width: 1.25;
+  stroke-dasharray: 1 1;
+}
+.stats-hist-legend {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.stats-hist-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.stats-hist-legend-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.stats-hist-legend-whole {
+  background: var(--accent-2);
+  opacity: 0.85;
+}
+.stats-hist-legend-clip {
+  background: #e0673a;
+  opacity: 0.7;
 }

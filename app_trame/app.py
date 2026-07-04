@@ -354,6 +354,24 @@ state.hover_html = ""
 state.hover_x = 0
 state.hover_y = 0
 
+# --- Histogram (distribution of the active scalar) ------------------------ #
+state.histogram_img = ""          # data:image/png;base64,... matplotlib histogram
+state.histogram_bins = {"counts": [], "edges": [], "n": 0}
+
+# --- Clip + visible-part stats (display-only) ------------------------------ #
+# Isolates a sub-part of the CURRENTLY DISPLAYED surface with an axis-aligned
+# clip plane and recomputes mean/median/sd/n from that clipped mesh's own
+# point-data scalar — shown alongside the whole-map ("total") stats. Never
+# re-runs the thickness/deviation pipeline; the clip only ever narrows which
+# already-computed vertices are summarised.
+state.clip_enabled = False
+state.clip_axis = "x"             # "x" | "y" | "z"
+state.clip_fraction = 0.5         # 0..1 position along that axis' bbox extent
+state.clip_invert = False         # which side of the plane counts as "visible"
+state.clip_total_stats = {}       # {mean, median, sd, min, max, n} — whole map
+state.clip_visible_stats = {}     # same shape, over the clipped/visible subset
+state.clip_msg = ""
+
 # --- Export panel --------------------------------------------------------- #
 state.export_formats = ["png", "vtp"]
 state.export_format_choices = ["png", "tiff", "jpg", "stl", "ply", "obj",
@@ -1158,39 +1176,242 @@ def _meta_html() -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Hover picking: read the scalar at the point under the cursor.
+# Histogram + clip / visible-part stats.
+#
+# Both features are DISPLAY-ONLY: they read the scalar array already sitting on
+# the LAST COMPUTED mesh (``_LAST_MESH``) — the same mesh the 3D view and the
+# hover tooltip use — and never touch core.pipeline's thickness/deviation
+# recompute. Every number comes straight from that mesh's point_data; nothing
+# is fabricated.
 # --------------------------------------------------------------------------- #
+def _active_scalar_mesh():
+    """Return (mesh, scalar_key, label) for whatever is CURRENTLY displayed."""
+    diverging = state.mode == "B" and state.b_view == "deviation"
+    mesh = _LAST_MESH["deviation"] if diverging else _LAST_MESH["thickness"]
+    key = "deviation_mm" if diverging else "thickness_mm"
+    label = "Signed deviation (mm)" if diverging else "Cortical thickness (mm)"
+    return mesh, key, label
+
+
+def _scalar_stats(v: np.ndarray) -> dict:
+    """Same shape as core.pipeline._stats (mean/median/sd/min/max/n) — kept
+    local because this is a DISPLAY-only recompute over a client-side subset
+    (the clipped mesh), not a new measurement pipeline."""
+    v = np.asarray(v, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"mean": float("nan"), "median": float("nan"), "sd": float("nan"),
+                "min": float("nan"), "max": float("nan"), "n": 0}
+    return {
+        "mean": round(float(np.mean(v)), 3), "median": round(float(np.median(v)), 3),
+        "sd": round(float(np.std(v)), 3), "min": round(float(np.min(v)), 3),
+        "max": round(float(np.max(v)), 3), "n": int(v.size),
+    }
+
+
+def _histogram_bins(values: np.ndarray, n_bins: int = 24) -> dict:
+    """Bin edges/counts for the active scalar (finite values only). Exposed as
+    plain data (not just a picture) so callers/tests can verify honesty:
+    ``sum(counts) == number of finite vertices``."""
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"counts": [], "edges": [], "n": 0}
+    counts, edges = np.histogram(v, bins=n_bins)
+    return {"counts": [int(c) for c in counts], "edges": [float(e) for e in edges],
+            "n": int(v.size)}
+
+
+def _render_histogram_png(values: np.ndarray, label: str, *, highlight: np.ndarray | None = None) -> str:
+    """Render a small matplotlib histogram of ``values`` to a base64 PNG data
+    URI. When ``highlight`` (the visible/clipped subset) is given, it is
+    overlaid so the operator can see the visible part's distribution against
+    the whole map's."""
+    import base64
+    import io
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    fig, ax = plt.subplots(figsize=(3.6, 2.0), dpi=120)
+    if v.size:
+        ax.hist(v, bins=24, color="#3b6ea5", alpha=0.85, label="total")
+        if highlight is not None:
+            h = np.asarray(highlight, dtype=np.float64)
+            h = h[np.isfinite(h)]
+            if h.size:
+                ax.hist(h, bins=24, color="#e8a33d", alpha=0.65, label="visible")
+                ax.legend(fontsize=6, frameon=False)
+    ax.set_xlabel(label, fontsize=8)
+    ax.set_ylabel("vertices", fontsize=8)
+    ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor="white")
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _clip_mesh(mesh, axis: str, fraction: float, invert: bool):
+    """Clip ``mesh`` with an axis-aligned plane at ``fraction`` (0..1) along
+    that axis' bounding-box extent, keeping the ``invert``-selected side.
+
+    Uses ``pyvista.PolyData.clip`` (a real geometric clip, not a scalar
+    threshold), so it isolates a sub-PART of the surface — the clipped mesh
+    keeps its original point_data arrays (thickness_mm / deviation_mm / the
+    Mode-B extras), which is what makes the "visible part" stats honest: they
+    are computed from THIS clipped mesh's own scalars, not re-derived.
+    """
+    bounds = mesh.bounds  # (xmin, xmax, ymin, ymax, zmin, zmax)
+    axis_idx = {"x": 0, "y": 1, "z": 2}[axis]
+    lo, hi = bounds[axis_idx * 2], bounds[axis_idx * 2 + 1]
+    origin = [ (bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0,
+              (bounds[4] + bounds[5]) / 2.0 ]
+    origin[axis_idx] = lo + fraction * (hi - lo)
+    normal = [0.0, 0.0, 0.0]
+    normal[axis_idx] = 1.0 if invert else -1.0
+    return mesh.clip(normal=tuple(normal), origin=tuple(origin), invert=False)
+
+
+def refresh_histogram_and_clip(*_a, **_k) -> None:
+    """Recompute the histogram + (optional) clip/visible-part stats from the
+    CURRENTLY DISPLAYED mesh's own point data. Display-only: runs entirely on
+    the last computed mesh, never calls core.pipeline. Safe to call whenever a
+    clip knob, the mode/b_view, or a fresh compute changes."""
+    mesh, key, label = _active_scalar_mesh()
+    if mesh is None or key not in mesh.point_data:
+        with state:
+            state.histogram_img = ""
+            state.histogram_bins = {"counts": [], "edges": [], "n": 0}
+            state.clip_total_stats = {}
+            state.clip_visible_stats = {}
+            state.clip_msg = "Nothing computed yet."
+        state.flush()
+        return
+
+    total_vals = np.asarray(mesh.point_data[key], dtype=np.float64)
+    total_stats = _scalar_stats(total_vals)
+
+    visible_vals = total_vals
+    visible_stats = total_stats
+    clip_msg = ""
+    if state.clip_enabled:
+        try:
+            clipped = _clip_mesh(mesh, state.clip_axis, float(state.clip_fraction),
+                                 bool(state.clip_invert))
+            if clipped.n_points > 0 and key in clipped.point_data:
+                visible_vals = np.asarray(clipped.point_data[key], dtype=np.float64)
+                visible_stats = _scalar_stats(visible_vals)
+                clip_msg = (f"{visible_stats['n']:,} / {total_stats['n']:,} vertices "
+                           f"visible after clip.")
+            else:
+                visible_vals = np.array([])
+                visible_stats = _scalar_stats(visible_vals)
+                clip_msg = "Clip removed all vertices — widen the range."
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            clip_msg = f"Clip failed: {e}"
+            visible_vals, visible_stats = total_vals, total_stats
+
+    hist_highlight = visible_vals if state.clip_enabled else None
+    with state:
+        state.histogram_img = _render_histogram_png(total_vals, label, highlight=hist_highlight)
+        state.histogram_bins = _histogram_bins(total_vals)
+        state.clip_total_stats = total_stats
+        state.clip_visible_stats = visible_stats
+        state.clip_msg = clip_msg
+    state.flush()
+
+
+ctrl.refresh_histogram_and_clip = refresh_histogram_and_clip
+
+
+# --------------------------------------------------------------------------- #
+# Hover picking: read the scalar(s) at the point under the cursor.
+#
+# Mode A / Mode-B-thickness: single "thickness_mm" readout (unchanged).
+# Mode B deviation: the reference mesh returned by core.pipeline.compare_sides
+# carries FOUR per-vertex arrays (deviation_mm, ref_thickness_mm,
+# tgt_thickness_mm, thickness_diff_mm — see hover_scalars in the pipeline
+# result). We read all four at the picked vertex id so the tooltip surfaces
+# reference thickness, target (contralateral) thickness, their difference, AND
+# the signed deviation — every number sourced straight from the loaded mesh's
+# point data, never fabricated.
+# --------------------------------------------------------------------------- #
+_MODE_B_HOVER_SCALARS = ["deviation_mm", "ref_thickness_mm", "tgt_thickness_mm",
+                        "thickness_diff_mm"]
+_HOVER_LABELS = {
+    "deviation_mm": ("Deviation", "%+.2f"),
+    "ref_thickness_mm": ("Reference thickness", "%.2f"),
+    "tgt_thickness_mm": ("Target thickness", "%.2f"),
+    "thickness_diff_mm": ("Thickness diff (ref − tgt)", "%+.2f"),
+}
+
+
+def _read_hover_scalars(mesh, pid: int, keys: list[str]) -> dict[str, dict]:
+    """Read each of ``keys`` at vertex ``pid`` (best-effort per key: an array
+    that isn't present or is NaN at that vertex is simply omitted — never
+    fabricated). Returns {key: {value, mean}}."""
+    out: dict[str, dict] = {}
+    for key in keys:
+        if key not in mesh.point_data:
+            continue
+        arr = np.asarray(mesh.point_data[key], dtype=float)
+        val = float(arr[pid])
+        if not np.isfinite(val):
+            continue
+        finite = arr[np.isfinite(arr)]
+        mean = float(np.mean(finite)) if finite.size else float("nan")
+        out[key] = {"value": val, "mean": mean}
+    return out
+
+
 def _on_hover(point, *_a, **_k):
-    """pyvista hover callback: show the picked scalar + position in a tooltip.
+    """pyvista hover callback: show the picked scalar(s) + position in a tooltip.
 
     ``point`` is the world-space (x,y,z) under the cursor (or None off-surface).
-    We look up the active surface's scalar there and compare it to the map mean.
+    We look up the active surface's scalar(s) there and compare each to its map
+    mean. In Mode B deviation, ALL FOUR carried scalars are read from the SAME
+    picked vertex (registered surfaces share vertex indexing per-point).
     """
-    key = "deviation_mm" if (state.mode == "B" and state.b_view == "deviation") \
-        else "thickness_mm"
-    mesh = _LAST_MESH["deviation"] if key == "deviation_mm" else _LAST_MESH["thickness"]
-    if point is None or mesh is None or key not in mesh.point_data:
+    mode_b_dev = state.mode == "B" and state.b_view == "deviation"
+    mesh = _LAST_MESH["deviation"] if mode_b_dev else _LAST_MESH["thickness"]
+    primary_key = "deviation_mm" if mode_b_dev else "thickness_mm"
+    if point is None or mesh is None or primary_key not in mesh.point_data:
         with state:
             state.hover_active = False
         state.flush()
         return
     try:
         pid = mesh.find_closest_point(np.asarray(point, dtype=float))
-        val = float(mesh.point_data[key][pid])
         pos = np.asarray(mesh.points[pid], dtype=float)
-        scal = np.asarray(mesh.point_data[key], dtype=float)
-        mean = float(np.mean(scal))
+        keys = _MODE_B_HOVER_SCALARS if mode_b_dev else [primary_key]
+        readings = _read_hover_scalars(mesh, pid, keys)
     except Exception:  # noqa: BLE001
         return
-    unit = "mm"
-    label = "Deviation" if key == "deviation_mm" else "Thickness"
-    fmt = "%+.2f" if key == "deviation_mm" else "%.2f"
-    delta = val - mean
+    if not readings:
+        return
+
+    lines = []
+    for key in keys:
+        r = readings.get(key)
+        if r is None:
+            continue
+        label, fmt = _HOVER_LABELS.get(key, (key, "%.2f"))
+        delta = r["value"] - r["mean"]
+        lines.append(
+            f"<div style='margin-bottom:2px'>"
+            f"<span style='font-weight:700'>{label}:</span> "
+            f"{fmt % r['value']} mm "
+            f"<span style='color:#aaa'>(map mean {fmt % r['mean']}, "
+            f"{'+' if delta >= 0 else ''}{delta:.2f})</span></div>"
+        )
     html_out = (
-        f"<div style='font-weight:700;font-size:13px;margin-bottom:2px'>"
-        f"{label}: {fmt % val} {unit}</div>"
-        f"<div style='font-size:11px;color:#ddd;line-height:1.5'>"
-        f"vs map mean {fmt % mean} ({'+' if delta >= 0 else ''}{delta:.2f} {unit})<br>"
+        "".join(lines) +
+        f"<div style='font-size:11px;color:#ddd;line-height:1.5;margin-top:2px'>"
         f"x {pos[0]:.1f} · y {pos[1]:.1f} · z {pos[2]:.1f} mm</div>"
     )
     with state:
@@ -1382,6 +1603,9 @@ def _compute_worker(req_id: int | None = None):
         if ctrl.view_update:
             ctrl.view_update()
         state.flush()
+        # Fresh geometry -> refresh the histogram + clip/visible-part stats
+        # from the newly computed mesh's own scalar (display-only).
+        refresh_histogram_and_clip()
 
         # After the first thickness compute for the active side, lazily load the
         # per-region preview thumbnails (cached per session/side). Skipped for
@@ -1512,6 +1736,13 @@ for _k in _RECOMPUTE_PARAM_KEYS + _RECOMPUTE_STATE_KEYS:
     state.change(_k)(schedule_recompute)
 for _k in _DISPLAY_ONLY_PARAM_KEYS:
     state.change(_k)(apply_display_only)
+
+# Histogram + clip reactivity: purely DISPLAY-only over the last computed mesh
+# — never routes through schedule_recompute/core.pipeline. Also re-run after a
+# display-only recolor no-op call so switching Mode A<->B thickness view stays
+# in sync even when the underlying mesh didn't change.
+for _k in ("clip_enabled", "clip_axis", "clip_fraction", "clip_invert"):
+    state.change(_k)(refresh_histogram_and_clip)
 
 # MPR reactivity: a plane slider moves -> mirror to crosshair + re-render;
 # window/level changes -> re-render all three panels. These are display-only for
@@ -1993,6 +2224,19 @@ with SinglePageWithDrawerLayout(server) as layout:
                      style="background:#fafafa;border:1px solid #eee;"
                            "border-radius:6px;padding:8px;margin-bottom:8px")
 
+            # ---- Histogram (distribution of the active scalar) ---------------
+            with html.Div(
+                v_if="histogram_img",
+                style="background:#fafafa;border:1px solid #eee;border-radius:6px;"
+                      "padding:8px;margin-bottom:8px"):
+                html.Div(
+                    "Distribution (of the loaded mesh's own point data)",
+                    style="font-size:11px;font-weight:700;letter-spacing:.04em;"
+                          "text-transform:uppercase;color:#333;margin-bottom:4px")
+                html.Img(src=("histogram_img",),
+                         style="width:100%;height:auto;display:block;"
+                               "border-radius:4px;background:#fff")
+
         # ---- Expansion panels: params + Mode B manual anchor + Export --------
         groups: dict[str, list] = {}
         for c in control_specs():
@@ -2043,6 +2287,67 @@ with SinglePageWithDrawerLayout(server) as layout:
                             color="primary", variant="tonal", classes="mt-3",
                             prepend_icon="mdi-refresh",
                             click=ctrl.recompute)
+
+            # ---- Clip + visible-part stats (display-only) --------------------
+            # Isolates a sub-part of the CURRENTLY DISPLAYED surface with an
+            # axis-aligned clip plane and shows "visible part" stats alongside
+            # the whole map's ("total") — recomputed from the CLIPPED mesh's
+            # own point-data scalar. Never re-runs the thickness/deviation
+            # pipeline (no new geometry, no new measurement).
+            with v3.VExpansionPanel(title="Clip / visible-part stats"):
+                with v3.VExpansionPanelText():
+                    html.Div(
+                        "Isolate a sub-part of the surface with an "
+                        "axis-aligned clip plane; stats below recompute from "
+                        "the CLIPPED mesh's own scalar (display-only — no "
+                        "recompute pipeline).",
+                        style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.4")
+                    v3.VSwitch(v_model=("clip_enabled",), label="Enable clip",
+                               density="compact", hide_details=True,
+                               color="primary", classes="mb-2")
+                    v3.VSelect(
+                        v_model=("clip_axis",),
+                        items=(["x", "y", "z"],),
+                        label="Clip axis", density="compact", hide_details=True,
+                        variant="outlined", classes="mb-2",
+                        disabled=("!clip_enabled",))
+                    v3.VSlider(
+                        v_model=("clip_fraction",), label="Plane position",
+                        min=0.0, max=1.0, step=0.01, thumb_label=True,
+                        density="compact", hide_details=True, color="primary",
+                        disabled=("!clip_enabled",))
+                    v3.VSwitch(v_model=("clip_invert",), label="Flip visible side",
+                               density="compact", hide_details=True,
+                               color="primary", classes="mt-2",
+                               disabled=("!clip_enabled",))
+                    html.Div("{{ clip_msg }}", v_if="clip_msg",
+                             style="font-size:11px;color:#666;margin-top:6px")
+
+                    with html.Div(
+                        v_if="clip_enabled",
+                        style="display:flex;flex-direction:row;gap:10px;margin-top:10px"):
+                        with html.Div(style="flex:1 1 0;min-width:0;background:#fafafa;"
+                                             "border:1px solid #eee;border-radius:6px;padding:8px"):
+                            html.Div("Total (whole map)",
+                                     style="font-size:11px;font-weight:700;color:#333;"
+                                           "margin-bottom:3px")
+                            html.Div(
+                                "mean {{ clip_total_stats.mean }} · sd {{ clip_total_stats.sd }}",
+                                style="font-size:11px;color:#555")
+                            html.Div(
+                                "n {{ clip_total_stats.n }}",
+                                style="font-size:11px;color:#555")
+                        with html.Div(style="flex:1 1 0;min-width:0;background:#eef6ee;"
+                                             "border:1px solid #cfe6cf;border-radius:6px;padding:8px"):
+                            html.Div("Visible part (clipped)",
+                                     style="font-size:11px;font-weight:700;color:#245c24;"
+                                           "margin-bottom:3px")
+                            html.Div(
+                                "mean {{ clip_visible_stats.mean }} · sd {{ clip_visible_stats.sd }}",
+                                style="font-size:11px;color:#2f6b2f")
+                            html.Div(
+                                "n {{ clip_visible_stats.n }}",
+                                style="font-size:11px;color:#2f6b2f")
 
             # Export panel.
             with v3.VExpansionPanel(title="Export"):

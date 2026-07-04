@@ -19,4 +19,15 @@ export default defineConfig({
       },
     },
   },
+  // `vite preview` (serves the production `dist/` build) needs its own proxy
+  // block — it does NOT inherit `server.proxy` — so the built app can also
+  // reach the API during local/manual verification.
+  preview: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
 });

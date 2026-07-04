@@ -7,10 +7,13 @@
 // Geometry is loaded with vtkXMLPolyDataReader from the ArrayBuffer fetched from
 // the returned geometry_url. No analysis happens here.
 //
-// HOVER: a vtkPointPicker fires on mouse-move over the render window. When it
-// lands on the surface we read the picked point's active scalar (thickness_mm
-// or deviation_mm) and its world position and hand them to the parent via
-// `onHover`, which draws an HTML tooltip. This is real picking, not a mock.
+// HOVER: a vtkCellPicker fires on mouse-move over the render window. When it
+// lands on the surface we read EVERY point_data array's value at the picked
+// vertex (not just the active scalar) plus its world position and hand them to
+// the parent via `onHover`, which draws an HTML tooltip. In Mode B this lets
+// the tooltip show reference thickness, contralateral (target) thickness, the
+// signed difference and the signed deviation together — all read straight from
+// the already-loaded mesh's point data. This is real picking, not a mock.
 
 import { useEffect, useRef } from 'react';
 
@@ -25,6 +28,7 @@ import vtkOrientationMarkerWidget from '@kitware/vtk.js/Interaction/Widgets/Orie
 import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
 import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
 import vtkPlaneSource from '@kitware/vtk.js/Filters/Sources/PlaneSource';
+import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 
 import { fetchGeometryArrayBuffer } from './api';
 import { buildDiscreteLUT } from './colors';
@@ -35,52 +39,74 @@ function parseVtp(arrayBuffer) {
   return reader.getOutputData(0);
 }
 
-// Read the per-point scalar for a picked cell. The picker gives us a cell id and
-// the world position of the hit; we return the scalar of the cell vertex closest
-// to that hit, which is the value the clinician is pointing at. Falls back to a
-// direct point lookup when the cell can't be resolved.
-function scalarAtPickedCell(polydata, scalarName, cellId, pos) {
-  const scalars = polydata.getPointData().getArrayByName(scalarName);
-  if (!scalars) return null;
-  const data = scalars.getData();
+// Find the point id of the cell vertex closest to the pick hit. The picker
+// gives us a cell id and the world position of the hit; we walk the polys
+// connectivity to find that cell's point ids and return whichever is nearest
+// the hit position — the vertex the clinician is actually pointing at.
+// Returns null if connectivity is unavailable (rare).
+function pickedPointId(polydata, cellId, pos) {
   const points = polydata.getPoints().getData();
   const polys = polydata.getPolys()?.getData();
+  if (!polys) return null;
 
-  // Walk the polys connectivity to find this cell's point ids. VTK cell arrays
-  // are [n, id0, id1, ..., n, id0, ...]; for triangle meshes n is usually 3.
-  if (polys) {
-    let idx = 0;
-    let cell = 0;
-    while (idx < polys.length) {
-      const n = polys[idx];
-      if (cell === cellId) {
-        let bestId = polys[idx + 1];
-        let bestD = Infinity;
-        for (let k = 0; k < n; k += 1) {
-          const pid = polys[idx + 1 + k];
-          const dx = points[pid * 3] - pos[0];
-          const dy = points[pid * 3 + 1] - pos[1];
-          const dz = points[pid * 3 + 2] - pos[2];
-          const d = dx * dx + dy * dy + dz * dz;
-          if (d < bestD) {
-            bestD = d;
-            bestId = pid;
-          }
+  // VTK cell arrays are [n, id0, id1, ..., n, id0, ...]; for triangle meshes n
+  // is usually 3.
+  let idx = 0;
+  let cell = 0;
+  while (idx < polys.length) {
+    const n = polys[idx];
+    if (cell === cellId) {
+      let bestId = polys[idx + 1];
+      let bestD = Infinity;
+      for (let k = 0; k < n; k += 1) {
+        const pid = polys[idx + 1 + k];
+        const dx = points[pid * 3] - pos[0];
+        const dy = points[pid * 3 + 1] - pos[1];
+        const dz = points[pid * 3 + 2] - pos[2];
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < bestD) {
+          bestD = d;
+          bestId = pid;
         }
-        return data[bestId];
       }
-      idx += n + 1;
-      cell += 1;
+      return bestId;
     }
+    idx += n + 1;
+    cell += 1;
   }
-  // Fallback: nearest point overall (rare — only if connectivity is unavailable).
   return null;
+}
+
+// Read a single named point-data scalar at a point id.
+function scalarAt(polydata, scalarName, pointId) {
+  const scalars = polydata.getPointData().getArrayByName(scalarName);
+  if (!scalars) return null;
+  return scalars.getData()[pointId];
+}
+
+// Read EVERY point_data array's value at a point id, e.g. { thickness_mm: 2.1,
+// deviation_mm: -0.4, ... }. Used so a hover can show more than just the active
+// scalar (Mode B needs ref/target thickness + diff + deviation together).
+function allScalarsAt(polydata, pointId) {
+  const pd = polydata.getPointData();
+  const out = {};
+  const n = pd.getNumberOfArrays();
+  for (let i = 0; i < n; i += 1) {
+    const arr = pd.getArrayByIndex(i);
+    const name = arr?.getName();
+    if (!name) continue;
+    out[name] = arr.getData()[pointId];
+  }
+  return out;
 }
 
 // `geometry` = { url, scalar, rangeMin, rangeMax, steps, colormap, reverse } or
 // null (nothing computed yet).
-// `onHover(info|null)` — info = { value, x, y, z, screenX, screenY } while the
-// cursor is over the surface, null when it leaves.
+// `onHover(info|null)` — info = { value, scalars, x, y, z, screenX, screenY }
+// while the cursor is over the surface, null when it leaves. `scalars` is every
+// point_data array's value at the picked vertex, e.g.
+// { thickness_mm } (Mode A) or
+// { deviation_mm, ref_thickness_mm, tgt_thickness_mm, thickness_diff_mm } (Mode B).
 // `cameraPose` — { azimuth, elevation, roll, zoom } applied to the reset camera
 // so the on-screen pose matches the Export panel's requested pose.
 // `onPick(worldXyz)` — fires with the picked [x,y,z] world point when the user
@@ -91,13 +117,48 @@ function scalarAtPickedCell(polydata, scalarName, cellId, pos) {
 //   arbitrary-cross-section widget: draws a translucent square plane actor at
 //   that origin/normal so the user sees exactly what the 2D oblique reformat
 //   is cutting. Omit / null to hide it (unused by the other center views).
-export default function Viewport({ geometry, onHover, cameraPose, onPick, marker, plane }) {
+// `onScalarData(values|null)` — fires with the active scalar's full per-vertex
+//   typed array (e.g. every thickness_mm or deviation_mm value across the
+//   loaded surface) whenever the geometry (re)loads or the active scalar name
+//   changes, so the parent can compute a distribution histogram in the browser
+//   with no extra API call — the array is already in the parsed polydata.
+// `clipBox` — { xmin, xmax, ymin, ymax, zmin, zmax } or null. When set, SIX
+//   vtk.js mapper clipping planes hide every fragment outside the box (GPU-side,
+//   no geometry copy) — everything OUTSIDE the box disappears from the render.
+//   "Reset clip" is just passing null / the full mesh bounds again.
+// `onBounds(bounds|null)` — fires with the loaded polydata's bounds
+//   [xmin,xmax,ymin,ymax,zmin,zmax] whenever new geometry loads, so the parent
+//   can seed the clip-box sliders to the real mesh extent.
+// `onVisibleMask(mask|null)` — fires with a Uint8Array (1 = inside the current
+//   clip box, 0 = outside), one entry per point in the SAME order as the active
+//   scalar array, whenever the geometry or clip box changes. With no clip box
+//   active this is null (nothing to mask — "whole" already means everything).
+//   Used by the parent to recompute Mean/Median/SD/RMS/Min/Max/Count over just
+//   the visible (on-screen) vertices, entirely client-side.
+export default function Viewport({
+  geometry,
+  onHover,
+  cameraPose,
+  onPick,
+  marker,
+  plane,
+  onScalarData,
+  clipBox,
+  onBounds,
+  onVisibleMask,
+}) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const onScalarDataRef = useRef(onScalarData);
+  onScalarDataRef.current = onScalarData;
+  const onBoundsRef = useRef(onBounds);
+  onBoundsRef.current = onBounds;
+  const onVisibleMaskRef = useRef(onVisibleMask);
+  onVisibleMaskRef.current = onVisibleMask;
 
   // ---- one-time vtk.js setup ------------------------------------------------
   useEffect(() => {
@@ -140,6 +201,20 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
     picker.setPickFromList(false);
     picker.setTolerance(0.01);
 
+    // ---- clip-box planes (Feature 3: isolate a sub-part) -------------------
+    // Six axis-aligned vtk.js clipping planes (+X/-X/+Y/-Y/+Z/-Z half-spaces).
+    // Added to the mapper so the GPU discards every fragment outside the box —
+    // no geometry copy, works on the existing actor. Kept even when the clip is
+    // "off": we just don't add them to the mapper until clipBox is set.
+    const clipPlanes = {
+      xmin: vtkPlane.newInstance({ normal: [1, 0, 0] }),
+      xmax: vtkPlane.newInstance({ normal: [-1, 0, 0] }),
+      ymin: vtkPlane.newInstance({ normal: [0, 1, 0] }),
+      ymax: vtkPlane.newInstance({ normal: [0, -1, 0] }),
+      zmin: vtkPlane.newInstance({ normal: [0, 0, 1] }),
+      zmax: vtkPlane.newInstance({ normal: [0, 0, -1] }),
+    };
+
     contextRef.current = {
       genericRenderWindow,
       renderer,
@@ -156,6 +231,8 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
       markerSource: null,
       planeActor: null,
       planeSource: null,
+      clipPlanes,
+      clipActive: false,
     };
 
     // ---- linked-crosshair marker (a small red sphere) ----------------------
@@ -222,9 +299,13 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
         return;
       }
       const pos = ctx.picker.getPickPosition();
-      const value = scalarAtPickedCell(ctx.polydata, ctx.scalarName, cellId, pos);
+      const pointId = pickedPointId(ctx.polydata, cellId, pos);
+      const value =
+        pointId != null ? scalarAt(ctx.polydata, ctx.scalarName, pointId) : null;
+      const scalars = pointId != null ? allScalarsAt(ctx.polydata, pointId) : {};
       onHoverRef.current?.({
         value,
+        scalars,
         x: pos[0],
         y: pos[1],
         z: pos[2],
@@ -315,7 +396,10 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
   // ---- (re)build the scene whenever the geometry / coloring changes ---------
   useEffect(() => {
     const ctx = contextRef.current;
-    if (!ctx || !geometry || !geometry.url) return undefined;
+    if (!ctx || !geometry || !geometry.url) {
+      onScalarDataRef.current?.(null);
+      return undefined;
+    }
 
     let cancelled = false;
 
@@ -338,9 +422,22 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
         renderer.addActor(ctx.actor);
         ctx.polydata = polydata;
         ctx.lastUrl = geometry.url;
+        // A new geometry means a brand-new vtkMapper instance with no clipping
+        // planes yet; the clip-box effect below (keyed partly on geometry.url)
+        // re-adds them if a clip is currently active.
+        ctx.clipActive = false;
+        // Hand the new mesh's real bounds up so the parent can seed the
+        // clip-box sliders to the actual extent of THIS geometry.
+        onBoundsRef.current?.(polydata.getBounds());
       }
       if (!ctx.mapper) return;
       ctx.scalarName = geometry.scalar;
+
+      // Hand the active scalar's full per-vertex array up to the parent (for
+      // the Stats panel histogram) — read straight from the loaded polydata,
+      // no new fetch.
+      const scalarArr = ctx.polydata?.getPointData().getArrayByName(geometry.scalar);
+      onScalarDataRef.current?.(scalarArr ? scalarArr.getData() : null);
 
       const lut = buildDiscreteLUT({
         rangeMin: geometry.rangeMin,
@@ -376,6 +473,70 @@ export default function Viewport({ geometry, onHover, cameraPose, onPick, marker
     geometry?.steps,
     geometry?.reverse,
     geometry?.colormap,
+  ]);
+
+  // ---- clip box: move the 6 planes, toggle them on the mapper, recompute the
+  // per-vertex visible mask ---------------------------------------------------
+  // A point is "inside" the box (visible) when xmin<=x<=xmax (and same for y/z).
+  // Each plane's normal points INWARD (e.g. xmin plane has normal +X), so
+  // vtk.js clips away everything on the negative side of every plane — i.e.
+  // outside the box. The mask uses the identical inequality so the Stats panel
+  // sees exactly what the mapper is drawing — never an approximation.
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.mapper) return;
+    const { mapper, clipPlanes, polydata } = ctx;
+
+    if (!clipBox) {
+      if (ctx.clipActive) {
+        mapper.removeAllClippingPlanes();
+        ctx.clipActive = false;
+        ctx.renderWindow?.render();
+      }
+      onVisibleMaskRef.current?.(null);
+      return;
+    }
+
+    const { xmin, xmax, ymin, ymax, zmin, zmax } = clipBox;
+    clipPlanes.xmin.setOrigin(xmin, 0, 0);
+    clipPlanes.xmax.setOrigin(xmax, 0, 0);
+    clipPlanes.ymin.setOrigin(0, ymin, 0);
+    clipPlanes.ymax.setOrigin(0, ymax, 0);
+    clipPlanes.zmin.setOrigin(0, 0, zmin);
+    clipPlanes.zmax.setOrigin(0, 0, zmax);
+
+    if (!ctx.clipActive) {
+      Object.values(clipPlanes).forEach((p) => mapper.addClippingPlane(p));
+      ctx.clipActive = true;
+    }
+    ctx.renderWindow?.render();
+
+    // Per-vertex visible mask, same order as the point-data arrays.
+    if (polydata) {
+      const pts = polydata.getPoints().getData();
+      const nPts = pts.length / 3;
+      const mask = new Uint8Array(nPts);
+      for (let i = 0; i < nPts; i += 1) {
+        const x = pts[i * 3];
+        const y = pts[i * 3 + 1];
+        const z = pts[i * 3 + 2];
+        mask[i] =
+          x >= xmin && x <= xmax && y >= ymin && y <= ymax && z >= zmin && z <= zmax
+            ? 1
+            : 0;
+      }
+      onVisibleMaskRef.current?.(mask);
+    } else {
+      onVisibleMaskRef.current?.(null);
+    }
+  }, [
+    clipBox?.xmin,
+    clipBox?.xmax,
+    clipBox?.ymin,
+    clipBox?.ymax,
+    clipBox?.zmin,
+    clipBox?.zmax,
+    geometry?.url,
   ]);
 
   // ---- re-apply the camera pose when it changes (no geometry reload) --------
