@@ -1,0 +1,138 @@
+# 3Dorth on Kubernetes (RKE2 etc.) — GPU-native, server-only (no Mac transfer).
+# Placeholders (${...}) are filled by scripts/deploy_k8s.sh (envsubst): IMAGE_GPU,
+# IMAGE_REACT, GPU_RESOURCE (e.g. nvidia.com/gpu or nvidia.com/mig-3g.71gb),
+# GPU_COUNT, NAMESPACE, plus the THREEDORTH_* compute settings.
+#
+# Architecture note (honest): the API keeps sessions IN MEMORY, so it runs as ONE
+# replica scaled VERTICALLY (a MIG GPU + high concurrency). The stateless React tier
+# gets an HPA. True multi-replica API autoscale needs sticky routing / shared session
+# storage (see the README "Security & scaling") — ask and we'll add it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: 3dorth-env
+  namespace: ${NAMESPACE}
+data:
+  THREEDORTH_MAX_SESSIONS: "${THREEDORTH_MAX_SESSIONS}"
+  THREEDORTH_COMPUTE_CONCURRENCY: "${THREEDORTH_COMPUTE_CONCURRENCY}"
+  THREEDORTH_MAX_WORK_VOXELS: "${THREEDORTH_MAX_WORK_VOXELS}"
+  THREEDORTH_MAX_ISO_VOXELS: "${THREEDORTH_MAX_ISO_VOXELS}"
+  THREEDORTH_GPU: "${THREEDORTH_GPU}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 3dorth-api
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1                      # in-memory sessions -> single replica, scale vertically
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: 3dorth-api } }
+  template:
+    metadata: { labels: { app: 3dorth-api } }
+    spec:
+      containers:
+        - name: api
+          image: ${IMAGE_GPU}
+          command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports: [{ containerPort: 8000 }]
+          envFrom: [{ configMapRef: { name: 3dorth-env } }]
+          resources:
+            limits:
+              ${GPU_RESOURCE}: "${GPU_COUNT}"   # <- the MIG/GPU slice
+              memory: "${API_MEM_LIMIT}"
+            requests:
+              cpu: "${API_CPU_REQUEST}"
+              memory: "${API_MEM_REQUEST}"
+          readinessProbe:
+            httpGet: { path: /api/config, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: 3dorth-api
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: 3dorth-api }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 3dorth-trame
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: 3dorth-trame } }
+  template:
+    metadata: { labels: { app: 3dorth-trame } }
+    spec:
+      containers:
+        - name: trame
+          image: ${IMAGE_GPU}
+          command: ["xvfb-run", "-a", "python", "-m", "app_trame.app", "--server", "--host", "0.0.0.0", "--port", "8080", "--timeout", "0"]
+          ports: [{ containerPort: 8080 }]
+          envFrom: [{ configMapRef: { name: 3dorth-env } }]
+          resources:
+            limits:
+              ${GPU_RESOURCE}: "${GPU_COUNT}"
+              memory: "${API_MEM_LIMIT}"
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: 3dorth-trame
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: 3dorth-trame }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 3dorth-react
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 2                       # stateless UI -> safe to scale out (HPA below)
+  selector: { matchLabels: { app: 3dorth-react } }
+  template:
+    metadata: { labels: { app: 3dorth-react } }
+    spec:
+      containers:
+        - name: react
+          image: ${IMAGE_REACT}
+          ports: [{ containerPort: 80 }]
+          env:
+            - { name: NGINX_LISTEN_ADDR, value: "" }
+            - { name: NGINX_PORT, value: "80" }
+            - { name: API_UPSTREAM, value: "3dorth-api:8000" }   # cluster DNS -> the API service
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: 3dorth-react
+  namespace: ${NAMESPACE}
+spec:
+  selector: { app: 3dorth-react }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: 3dorth-react
+  namespace: ${NAMESPACE}
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: 3dorth-react }
+  minReplicas: 2
+  maxReplicas: ${REACT_MAX_REPLICAS}
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

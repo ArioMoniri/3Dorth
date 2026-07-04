@@ -1,0 +1,60 @@
+# Build the 3Dorth images ON THE CLUSTER with Kaniko (no privileged Docker, no Mac
+# transfer) and push them to your registry. Placeholders filled by deploy_k8s.sh:
+# NAMESPACE, GIT_CONTEXT (git://…#refs/heads/main), IMAGE_GPU, IMAGE_REACT.
+#
+# Needs a registry pull/push secret named `regcred` in ${NAMESPACE}:
+#   kubectl -n ${NAMESPACE} create secret docker-registry regcred \
+#     --docker-server=<registry> --docker-username=<user> --docker-password=<token>
+# If your cluster's PodSecurity blocks Kaniko, build on any machine and push instead
+# (docker build … && docker push …), then skip this Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: 3dorth-build-gpu
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:latest
+          args:
+            - "--context=${GIT_CONTEXT}"
+            - "--dockerfile=deploy/Dockerfile.backend.gpu"
+            - "--destination=${IMAGE_GPU}"
+            - "--cache=true"
+          volumeMounts:
+            - { name: regcred, mountPath: /kaniko/.docker }
+      volumes:
+        - name: regcred
+          secret:
+            secretName: regcred
+            items: [{ key: .dockerconfigjson, path: config.json }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: 3dorth-build-react
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:latest
+          args:
+            - "--context=${GIT_CONTEXT}"
+            - "--dockerfile=deploy/Dockerfile.react"
+            - "--destination=${IMAGE_REACT}"
+            - "--cache=true"
+          volumeMounts:
+            - { name: regcred, mountPath: /kaniko/.docker }
+      volumes:
+        - name: regcred
+          secret:
+            secretName: regcred
+            items: [{ key: .dockerconfigjson, path: config.json }]

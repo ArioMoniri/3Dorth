@@ -1,0 +1,41 @@
+# GPU backend image: same API/trame as Dockerfile.backend, but on a CUDA runtime
+# base with CuPy so core/resources.py runs the distance transforms on an NVIDIA GPU
+# (H200 / MIG) when the cluster grants the pod a device. Falls back to CPU if no
+# device is visible. Ubuntu 24.04 base => Python 3.12 (the version the app needs).
+FROM nvidia/cuda:12.4.1-runtime-ubuntu24.04
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Python 3.12 (native on 24.04) + headless OpenGL (Mesa/llvmpipe) + Xvfb + fonts.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3-pip \
+        libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa \
+        libxrender1 libxext6 libsm6 libx11-6 libxt6 libgomp1 \
+        xvfb fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# Isolated venv so we don't fight the distro's PEP-668 "externally managed" python.
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+COPY requirements.txt ./
+# App deps + CuPy for CUDA 12.x (H200 = Hopper, sm_90, supported by cupy-cuda12x).
+RUN pip install --no-cache-dir -r requirements.txt cupy-cuda12x
+
+COPY core ./core
+COPY api ./api
+COPY app_trame ./app_trame
+COPY config.yaml ./
+COPY data/demo ./data/demo
+
+RUN useradd -m appuser && mkdir -p outputs/sessions data/raw && chown -R appuser /app
+USER appuser
+
+EXPOSE 8000 8080
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -164,9 +164,38 @@ so no inbound ports are needed and the link never exposes SSH/the shell.
 | **Normal** (own box / VM) | `./serve-public.sh` or `./deploy.sh` | Docker bridge | `0.0.0.0` (behind your firewall) | auto-picked, or `REACT_HOST_PORT=…` |
 | **Strict / tunnel-only** | `BIND_ADDR=127.0.0.1 ./serve-public.sh` | Docker bridge | `127.0.0.1` (tunnel is the only door) | auto-picked |
 | **Restricted server** (RKE2, no build/bridge/systemd) | `./scripts/deploy_restricted.sh` | host (no bridge) | `127.0.0.1` strict (default) · `--expose` for `0.0.0.0` | auto-picked |
+| **Kubernetes** (GPU + autoscale) | `./scripts/deploy_k8s.sh` | ClusterIP + tunnel | in-cluster | Service ports |
 
-All three print the public Cloudflare link and keep it alive; none need an inbound
-port opened.
+All print the public Cloudflare link and keep it alive; none need an inbound port opened.
+
+### Kubernetes (GPU on the H200, build on-cluster, autoscale)
+
+The **only** way to actually reach the GPU inside a container on a cluster like this
+is a native Deployment that *requests* a MIG slice (device passthrough is done by the
+cluster's NVIDIA device plugin, not by a non-privileged pod's Docker). This path also
+**removes the Mac transfer** — it builds the images **on the cluster** with Kaniko
+(no privileged Docker) and pushes to your registry. Needs `kubectl` access, a
+registry, and the NVIDIA device plugin.
+
+```bash
+./scripts/deploy_k8s.sh --check                        # what's available (GPU resource, registry, kubectl)
+kubectl -n 3dorth create secret docker-registry regcred \
+  --docker-server=<registry> --docker-username=<user> --docker-password=<token>
+REGISTRY=<registry>/<you> ./scripts/deploy_k8s.sh --build   # build 3dorth-api-gpu + 3dorth-react on-cluster
+REGISTRY=<registry>/<you> ./scripts/deploy_k8s.sh           # apply Deployments/Services/HPA
+# expose (from this pod, outbound-only):
+kubectl -n 3dorth port-forward svc/3dorth-react 8088:80 &
+tmux new -s tunnel './scripts/share.sh 8088 8081'
+```
+
+`deploy/Dockerfile.backend.gpu` is a CUDA-12 image with CuPy so the distance
+transforms run on the H200; `deploy/k8s/3dorth.yaml` requests
+`${GPU_RESOURCE}` (auto-detected, e.g. `nvidia.com/gpu` or `nvidia.com/mig-3g.71gb`).
+The **API runs as one replica scaled vertically** (a MIG slice + high concurrency)
+because sessions are in memory; the **stateless React tier gets an HPA**. True
+multi-replica API autoscale would need sticky routing / shared session storage — the
+one place k8s complexity pays off, and easy to add on request. If you have no cluster
+access, the single-pod `deploy_restricted.sh` path still works (CPU-only).
 
 <details>
 <summary><b>Performance, memory, and GPU</b></summary>
