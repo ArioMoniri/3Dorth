@@ -9,6 +9,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // Accept the Host header from Cloudflare quick tunnels (*.trycloudflare.com)
+    // and any reverse proxy, so the app is reachable when shared publicly.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
