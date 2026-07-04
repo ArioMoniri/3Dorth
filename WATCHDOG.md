@@ -60,3 +60,13 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 - It re-derives, it does not re-read a claim. "Tests pass" means it ran them.
 - A gate flips to ✅ only when its named verification actually executes green.
 - On any red, downstream phases stay ⬜ — no building on an unverified base.
+
+## Progress log — full-build sweep
+- **Phase 2 measurement** ✅ `core/measurement` (Fig-2 line + height/valid-height); 8 tests.
+- **Phase 3 registration** ✅ `core/registration` (FPFH+RANSAC→ICP, PCA fallback, mirror); 9 tests recover known transforms.
+- **Phase 3 deviation** ✅ `core/deviation` (signed distance sign-verified on concentric spheres; vtk↔trimesh cross-check; stats). ⚠️ **Real left-vs-right Mode B is not yet meaningful**: the adducted right humerus is thorax-fused, so auto-isolation picks the wrong structure (inlier ~7.5%). Needs the UI clip/region-select to isolate before the comparison is valid — documented, not hidden.
+- **Phase 4 stats** ✅ `core/stats` (Table-1+CI, ANOVA/Tukey/SNK, paired, correlation, linear/nonlinear regression, Fig 3/4/5); 16 tests. Real-data descriptive report: `scripts/stats_report.py` → thickness-by-zone CSV + Fig 4/5 (single-subject, no inference claimed).
+- **Interactive backend** ✅ `core/pipeline` + `api/routers/session` (compute-on-demand). Verified: changing HU/algorithm changes the result (3.51 mm → 1.85 mm). This is the fix for "side-panel changes don't apply".
+- **Phase 5 UIs** 🟡 both frontends reworked to compute-on-demand (side selector, Apply/Recompute, Mode B thickness+deviation, upload); parity maintained (controls from registry). Final build/run verification pending.
+- **Phase 6 deploy** ✅ Dockerfiles + compose profiles + `deploy.sh` one-liner + README/LICENSE. Backend image builds (linux/amd64; open3d has no arm64 wheel). Full compose up + reproducibility re-run: pending final verification.
+- Total tests: 80+ pass; watchdog GREEN on the built surface.
