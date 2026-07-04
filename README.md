@@ -53,9 +53,32 @@ No patient data is in the image — upload a CT `.zip` in the UI to start.
 stops everything.
 
 **Share it temporarily.** With the servers running, `./scripts/share.sh` opens
-public Cloudflare tunnels to both UIs and writes the URLs so the in-app share
-panel picks them up. The URLs are ephemeral and unauthenticated — fine for a
-quick look, not for anything sensitive.
+public Cloudflare tunnels to both UIs and writes the URLs so the in-app Share
+panel picks them up. It stays running and **keeps the tunnels alive across
+laptop sleep/wake and network drops** — on a wake it restarts them and rewrites
+the URL, and the Share panel polls `/api/config`, so the link updates live with
+no manual step. The URLs are ephemeral and unauthenticated — fine for a quick
+look, not for anything sensitive (use a named Cloudflare tunnel + Access for that).
+
+<details>
+<summary><b>Performance, memory, and GPU</b></summary>
+
+The compute (segmentation, local thickness, registration) is bounded so it does
+not exhaust RAM on a small machine, and uses the GPU where present:
+
+- Volumes are held as int16 HU; oversized uploads are block-downsampled to a
+  voxel budget; the local-thickness grid resolution adapts to volume size.
+- Heavy computes are serialised (one at a time by default), and only the most
+  recent few scans are kept in memory.
+- Rendering uses the GPU (vtk.js in the browser, VTK server-side); if CuPy + a
+  CUDA device are present, distance transforms run on the GPU, otherwise on the
+  CPU. Everything degrades gracefully.
+
+All limits are environment variables so a device can be sized:
+`THREEDORTH_MAX_SESSIONS`, `THREEDORTH_COMPUTE_CONCURRENCY`,
+`THREEDORTH_MAX_WORK_VOXELS`, `THREEDORTH_MAX_ISO_VOXELS`, `THREEDORTH_GPU`.
+
+</details>
 
 ## Which frontend?
 
