@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 APP_PORT="${1:-8000}"; TRAME_PORT="${2:-}"
 OUT="outputs/public_urls.json"; mkdir -p outputs
 TOOLS="$(pwd)/.tools"; [ -x "$TOOLS/cloudflared" ] && export PATH="$TOOLS:$PATH"
-LOGD="$(mktemp -d)"; trap 'kill_prev; rm -rf "$LOGD"' EXIT INT TERM
+LOGD="$(pwd)/outputs/.tunnel"; mkdir -p "$LOGD"; trap kill_prev EXIT INT TERM   # logs persist for inspection
 
 kill_prev() {
   pkill -f "cloudflared tunnel --url"          2>/dev/null
@@ -60,7 +60,8 @@ url_from() {  # extract the current public URL from a provider's log
   local prov="$1" log="$2"
   case "$prov" in
     cloudflare) grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | tail -1 ;;
-    pinggy)     grep -oE 'https://[-a-z0-9]+\.(a\.)?(free\.)?pinggy\.(link|online|io)' "$log" 2>/dev/null | tail -1 ;;
+    # Pinggy TUNNEL urls are on *.pinggy.link / *.pinggy.online — NOT dashboard.pinggy.io
+    pinggy)     grep -oE 'https://[-a-z0-9.]+\.pinggy\.(link|online)' "$log" 2>/dev/null | grep -v dashboard | tail -1 ;;
     ngrok)      grep -oE 'https://[-a-z0-9]+\.ngrok[-a-z0-9.]*\.(app|io|dev)' "$log" 2>/dev/null | tail -1 ;;
   esac
 }
@@ -82,10 +83,18 @@ if [ -n "$TRAME_PORT" ] && [ "$PROV" != ngrok ]; then   # ngrok free = 1 tunnel;
 fi
 
 ok "waiting for the public URL (a few seconds)…"
-last=""
+last=""; tries=0
 while :; do
   r="$(url_from "$PROV" "$RLOG")"
   t=""; [ -n "${TLOG:-}" ] && t="$(url_from "$PROV" "$TLOG")"
+  if [ -z "$r" ]; then
+    tries=$((tries + 1))
+    if [ "$tries" = 6 ]; then
+      warn "no public URL yet — here's what ${PROV} printed (outputs/.tunnel/app.log):"
+      tail -n 10 "$RLOG" 2>/dev/null | sed 's/^/    /'
+      warn "If it needs a signup/token, use ngrok:  TUNNEL_PROVIDER=ngrok ./scripts/tunnel.sh ${APP_PORT} ${TRAME_PORT}"
+    fi
+  else tries=0; fi
   cur="$r|$t"
   if [ "$cur" != "$last" ] && [ -n "$r" ]; then
     cat > "$OUT" <<JSON
