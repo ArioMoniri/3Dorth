@@ -97,6 +97,13 @@ SESSION: dict = {"arr": None, "spacing": None, "meta": None, "sides": {},
 _LOCK = threading.Lock()
 _LAST_MESH = {"thickness": None, "deviation": None}
 
+# Monotonic session generation: bumped whenever a new scan/mesh is adopted, so a
+# thumbnail cache keyed by (generation, side) is invalidated automatically.
+_SESSION_GEN = 0
+# (generation, side) -> [{label, volume_cm3, boneness, thumb}] region previews.
+_THUMB_CACHE: dict[tuple[int, str], list[dict]] = {}
+_THUMB_LOCK = threading.Lock()
+
 
 # --------------------------------------------------------------------------- #
 # Runtime config (Share panel + UI switcher). Read the same file the API uses.
@@ -117,11 +124,19 @@ def read_public_config() -> dict:
     }
 
 
+def _bump_session_gen() -> int:
+    """Advance the session generation (invalidates the thumbnail cache)."""
+    global _SESSION_GEN
+    _SESSION_GEN += 1
+    return _SESSION_GEN
+
+
 def _adopt_volume_session(arr, spacing, meta, layout="auto") -> None:
     sides = pipeline.split_sides(arr, spacing, layout=layout)
     with _LOCK:
         SESSION.update(arr=arr, spacing=spacing, meta=meta, sides=sides,
                        is_mesh=False)
+    _bump_session_gen()
 
 
 def _adopt_mesh_session(mesh, meta) -> None:
@@ -129,6 +144,7 @@ def _adopt_mesh_session(mesh, meta) -> None:
     with _LOCK:
         SESSION.update(arr=None, spacing=None, meta=meta, sides=sides,
                        is_mesh=True)
+    _bump_session_gen()
 
 
 def _load_source(path: Path, layout: str = "auto") -> None:
@@ -172,6 +188,110 @@ def _refresh_session_ui() -> None:
     if is_mesh_sess and state.mode == "A":
         state.mode = "B"
     state.meta_html = _meta_html()
+    # A fresh scan invalidates any previously shown region previews.
+    state.region_thumbs = []
+    state.region_thumbs_side = ""
+    state.region_thumbs_loading = False
+    state.region_thumbs_msg = ""
+    state.region_label = None
+
+
+def _downloads_url(thumb: str | None) -> str | None:
+    """Rewrite a pipeline ``/api/exports/<file>`` URL onto the trame server's
+    ``/downloads`` mount (the exports dir is served there). ``None`` stays None."""
+    if not thumb:
+        return None
+    return f"/downloads/{Path(thumb).name}"
+
+
+def load_region_thumbnails(*_a, **_k) -> None:
+    """Compute (or serve from cache) small per-region previews for the active
+    thickness side, on a background thread, and push them to the UI.
+
+    Calls ``core.pipeline.region_thumbnails`` DIRECTLY (trame is server-side).
+    Files land under ``outputs/exports`` (served at ``/downloads``). Cached per
+    (session generation, side). Skipped for a bare-mesh session (no volume
+    regions) and for the deviation view. Render takes ~5-10 s; the UI shows a
+    spinner meanwhile.
+    """
+    if bool(SESSION.get("is_mesh")):
+        return
+    if state.mode == "B" and state.b_view == "deviation":
+        return
+    side_key = state.side
+    with _LOCK:
+        gen = _SESSION_GEN
+        side = SESSION["sides"].get(side_key)
+    if side is None or side.get("arr") is None:
+        return
+
+    cache_key = (gen, side_key)
+    with _THUMB_LOCK:
+        cached = _THUMB_CACHE.get(cache_key)
+    if cached is not None:
+        with state:
+            state.region_thumbs = cached
+            state.region_thumbs_side = side_key
+            state.region_thumbs_loading = False
+            state.region_thumbs_msg = (
+                f"{len(cached)} region(s)." if cached else "No bone regions found."
+            )
+        state.flush()
+        return
+
+    with state:
+        state.region_thumbs_loading = True
+        state.region_thumbs = []
+        state.region_thumbs_side = side_key
+        state.region_thumbs_msg = "Rendering region previews… (~5–10 s)"
+    state.flush()
+
+    def _job():
+        try:
+            thumbs = pipeline.region_thumbnails(
+                side["arr"], side["spacing"], P.default_parameters(),
+                EXPORTS_DIR, f"{gen}_{side_key}",
+            )
+            for t in thumbs:
+                t["thumb"] = _downloads_url(t.get("thumb"))
+            with _THUMB_LOCK:
+                _THUMB_CACHE[cache_key] = thumbs
+            # Only apply if the session/side is still what we computed for.
+            with _LOCK:
+                still_current = (_SESSION_GEN == gen and state.side == side_key)
+            with state:
+                if still_current:
+                    state.region_thumbs = thumbs
+                    state.region_thumbs_side = side_key
+                state.region_thumbs_loading = False
+                state.region_thumbs_msg = (
+                    f"{len(thumbs)} region(s)." if thumbs
+                    else "No bone regions found.")
+            state.flush()
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            with state:
+                state.region_thumbs_loading = False
+                state.region_thumbs_msg = f"Preview render failed: {e}"
+            state.flush()
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
+ctrl.load_region_thumbnails = load_region_thumbnails
+
+
+def select_region(label, **_k):
+    """Pick a region from a thumbnail; store it and trigger a recompute so the
+    thickness map switches to that structure (parity with the React click)."""
+    try:
+        state.region_label = int(label)
+    except (TypeError, ValueError):
+        return
+    schedule_recompute()
+
+
+ctrl.select_region = select_region
 
 
 # --------------------------------------------------------------------------- #
@@ -195,6 +315,16 @@ state.session_sides = ["left", "right"]
 state.is_mesh_session = False
 state.is_bilateral = True
 state.upload_file = None
+
+# --- Region thumbnails (visual picker) ------------------------------------ #
+# Small rendered previews per connected bone region, computed via
+# core.pipeline.region_thumbnails and served from /downloads. Cached per
+# (session-generation, side) so switching side / re-opening doesn't recompute.
+state.region_thumbs = []          # [{label, volume_cm3, boneness, thumb: url|None}]
+state.region_thumbs_side = ""     # which side the shown thumbs belong to
+state.region_thumbs_loading = False
+state.region_thumbs_msg = ""
+state.region_label = None         # active region (None => auto-pick largest)
 
 # --- Share panel / UI switcher -------------------------------------------- #
 _cfg = read_public_config()
@@ -426,11 +556,21 @@ def _compute_worker(req_id: int | None = None):
             side = sides.get(side_key)
             if side is None:
                 raise RuntimeError(f"Unknown side '{side_key}'.")
+            region_label = state.region_label
+            try:
+                region_label = int(region_label) if region_label is not None else None
+            except (TypeError, ValueError):
+                region_label = None
             res = pipeline.analyze_thickness(
                 side["arr"], side["spacing"], params,
-                region_label=None, offset_xyz=side["offset_xyz"],
+                region_label=region_label, offset_xyz=side["offset_xyz"],
             )
             _LAST_MESH["thickness"] = res["mesh"]
+            # Adopt the server's chosen region so the picker reflects reality,
+            # WITHOUT re-triggering a recompute (only change when it differs).
+            picked = res.get("region_label")
+            if picked is not None and state.region_label != picked:
+                state.region_label = picked
             build_thickness_scene(PLOTTER, res["mesh"], params=params,
                                   side_label=_side_label(side_key))
             s = res["stats"]
