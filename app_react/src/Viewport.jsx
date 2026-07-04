@@ -1,11 +1,11 @@
-// The central vtk.js viewport. Renders either the Mode-A thickness map
-// (thickness.vtp colored by the `thickness_mm` point scalar with a discrete
-// green->yellow->red LUT + vertical scalar bar) or the region view (one actor
-// per region_<label>.vtp, highlighted region orange, rest neutral).
+// The central vtk.js viewport. Renders whatever geometry the compute API
+// returned: a Mode-A / per-side thickness map (colored by `thickness_mm` with a
+// sequential LUT) or a Mode-B deviation map (colored by `deviation_mm` with a
+// diverging LUT). Both are driven by a discrete LUT built from the response
+// scalar_range / colormap / steps, so the viewport and the HTML legend agree.
 //
-// Geometry is loaded with vtkXMLPolyDataReader from the ArrayBuffer fetched
-// from /api/geometry/*.vtp. No analysis happens here — colors and ranges come
-// straight from the manifest / registry defaults.
+// Geometry is loaded with vtkXMLPolyDataReader from the ArrayBuffer fetched from
+// the returned geometry_url. No analysis happens here.
 
 import { useEffect, useRef } from 'react';
 
@@ -19,21 +19,19 @@ import vtkAxesActor from '@kitware/vtk.js/Rendering/Core/AxesActor';
 import vtkOrientationMarkerWidget from '@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget';
 
 import { fetchGeometryArrayBuffer } from './api';
-import { buildDiscreteLUT, hexToRgb01, NEUTRAL_HEX, HIGHLIGHT_HEX } from './colors';
+import { buildDiscreteLUT } from './colors';
 
-// Parse a .vtp ArrayBuffer into a vtkPolyData.
 function parseVtp(arrayBuffer) {
   const reader = vtkXMLPolyDataReader.newInstance();
   reader.parseAsArrayBuffer(arrayBuffer);
   return reader.getOutputData(0);
 }
 
-export default function Viewport({ manifest, mode, coloring, regionState }) {
+// `geometry` = { url, scalar, rangeMin, rangeMax, steps, colormap, reverse } or
+// null (nothing computed yet).
+export default function Viewport({ geometry }) {
   const containerRef = useRef(null);
-  const contextRef = useRef(null); // holds vtk objects across renders
-  // Cache parsed polydata so we don't re-fetch/parse the (large) .vtp on every
-  // parameter tweak.
-  const geometryCacheRef = useRef({ thickness: null, regions: {} });
+  const contextRef = useRef(null);
 
   // ---- one-time vtk.js setup ------------------------------------------------
   useEffect(() => {
@@ -48,9 +46,6 @@ export default function Viewport({ manifest, mode, coloring, regionState }) {
     const renderWindow = genericRenderWindow.getRenderWindow();
     const interactor = genericRenderWindow.getInteractor();
 
-    // Orientation axes marker (bottom-left corner). The color legend is a crisp
-    // HTML overlay (see Legend.jsx), NOT a vtkScalarBarActor, so we keep the 3D
-    // viewport clean: bone + orientation axes only.
     const axes = vtkAxesActor.newInstance();
     const orientationWidget = vtkOrientationMarkerWidget.newInstance({
       actor: axes,
@@ -66,12 +61,10 @@ export default function Viewport({ manifest, mode, coloring, regionState }) {
       genericRenderWindow,
       renderer,
       renderWindow,
-      interactor,
       orientationWidget,
-      thicknessActor: null,
-      thicknessMapper: null,
-      lut: null,
-      regionActors: {}, // label -> { actor, mapper }
+      actor: null,
+      mapper: null,
+      lastUrl: null,
     };
 
     const onResize = () => genericRenderWindow.resize();
@@ -85,56 +78,69 @@ export default function Viewport({ manifest, mode, coloring, regionState }) {
     };
   }, []);
 
-  // ---- (re)build the scene whenever inputs change ---------------------------
+  // ---- (re)build the scene whenever the geometry / coloring changes ---------
   useEffect(() => {
     const ctx = contextRef.current;
-    if (!ctx || !manifest) return;
+    if (!ctx || !geometry || !geometry.url) return undefined;
 
     let cancelled = false;
 
     async function rebuild() {
       const { renderer, renderWindow } = ctx;
 
-      // Clear existing actors from the renderer (keep vtk objects for reuse).
-      if (ctx.thicknessActor) renderer.removeActor(ctx.thicknessActor);
-      Object.values(ctx.regionActors).forEach(({ actor }) => renderer.removeActor(actor));
+      // Only refetch/parse when the geometry URL actually changes; a pure
+      // coloring tweak just rebuilds the LUT.
+      const isNewGeometry = ctx.lastUrl !== geometry.url;
+      if (isNewGeometry) {
+        const buf = await fetchGeometryArrayBuffer(geometry.url);
+        if (cancelled) return;
+        const polydata = parseVtp(buf);
 
-      if (mode === 'A') {
-        await renderThickness(ctx, cancelledRef(() => cancelled), manifest, coloring, geometryCacheRef);
-      } else {
-        await renderRegions(ctx, cancelledRef(() => cancelled), manifest, regionState, geometryCacheRef);
+        if (ctx.actor) renderer.removeActor(ctx.actor);
+        ctx.mapper = vtkMapper.newInstance();
+        ctx.actor = vtkActor.newInstance();
+        ctx.actor.setMapper(ctx.mapper);
+        ctx.mapper.setInputData(polydata);
+        renderer.addActor(ctx.actor);
+        ctx.lastUrl = geometry.url;
       }
+      if (!ctx.mapper) return;
+
+      const lut = buildDiscreteLUT({
+        rangeMin: geometry.rangeMin,
+        rangeMax: geometry.rangeMax,
+        steps: geometry.steps,
+        reverse: geometry.reverse,
+        colormap: geometry.colormap,
+      });
+
+      ctx.mapper.setLookupTable(lut);
+      ctx.mapper.setUseLookupTableScalarRange(true);
+      ctx.mapper.setScalarRange(geometry.rangeMin, geometry.rangeMax);
+      ctx.mapper.setColorModeToMapScalars();
+      ctx.mapper.setScalarModeToUsePointFieldData();
+      ctx.mapper.setColorByArrayName(geometry.scalar);
+      ctx.mapper.setInterpolateScalarsBeforeMapping(true);
 
       if (cancelled) return;
+      if (isNewGeometry) renderer.resetCamera();
       renderer.resetCameraClippingRange();
       renderWindow.render();
     }
 
-    // First build should frame the data; later rebuilds keep the camera.
-    const firstBuild = !ctx.hasBuilt;
-    rebuild().then(() => {
-      if (cancelled || !contextRef.current) return;
-      if (firstBuild) {
-        ctx.renderer.resetCamera();
-        ctx.renderWindow.render();
-        ctx.hasBuilt = true;
-      }
-    });
+    rebuild();
 
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    manifest,
-    mode,
-    coloring.rangeMin,
-    coloring.rangeMax,
-    coloring.steps,
-    coloring.reverse,
-    coloring.colormap,
-    regionState.visible.join(','),
-    regionState.highlight,
+    geometry?.url,
+    geometry?.scalar,
+    geometry?.rangeMin,
+    geometry?.rangeMax,
+    geometry?.steps,
+    geometry?.reverse,
+    geometry?.colormap,
   ]);
 
   return (
@@ -143,90 +149,4 @@ export default function Viewport({ manifest, mode, coloring, regionState }) {
       style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
     />
   );
-}
-
-// Small helper so the async closures read whether the effect was cancelled.
-function cancelledRef(getter) {
-  return getter;
-}
-
-// ---- Mode A: thickness map ---------------------------------------------------
-async function renderThickness(ctx, isCancelled, manifest, coloring, geometryCacheRef) {
-  const { renderer } = ctx;
-  const th = manifest.thickness;
-
-  // Load + cache the thickness polydata.
-  if (!geometryCacheRef.current.thickness) {
-    const buf = await fetchGeometryArrayBuffer(th.file);
-    if (isCancelled()) return;
-    geometryCacheRef.current.thickness = parseVtp(buf);
-  }
-  const polydata = geometryCacheRef.current.thickness;
-
-  // Build (or rebuild) the discrete LUT for the current coloring state.
-  const lut = buildDiscreteLUT({
-    rangeMin: coloring.rangeMin,
-    rangeMax: coloring.rangeMax,
-    steps: coloring.steps,
-    reverse: coloring.reverse,
-    colormap: coloring.colormap,
-  });
-  ctx.lut = lut;
-
-  if (!ctx.thicknessMapper) {
-    ctx.thicknessMapper = vtkMapper.newInstance();
-    ctx.thicknessActor = vtkActor.newInstance();
-    ctx.thicknessActor.setMapper(ctx.thicknessMapper);
-  }
-  const mapper = ctx.thicknessMapper;
-  mapper.setInputData(polydata);
-  mapper.setLookupTable(lut);
-  mapper.setUseLookupTableScalarRange(true);
-  mapper.setScalarRange(coloring.rangeMin, coloring.rangeMax);
-  mapper.setColorModeToMapScalars();
-  mapper.setScalarModeToUsePointFieldData();
-  mapper.setColorByArrayName(th.scalar); // "thickness_mm"
-  mapper.setInterpolateScalarsBeforeMapping(true);
-
-  renderer.addActor(ctx.thicknessActor);
-}
-
-// ---- Region view -------------------------------------------------------------
-async function renderRegions(ctx, isCancelled, manifest, regionState, geometryCacheRef) {
-  const { renderer } = ctx;
-
-  await Promise.all(
-    manifest.regions.map(async (r) => {
-      const key = String(r.label);
-      if (!geometryCacheRef.current.regions[key]) {
-        const buf = await fetchGeometryArrayBuffer(r.file);
-        if (isCancelled()) return;
-        geometryCacheRef.current.regions[key] = parseVtp(buf);
-      }
-    }),
-  );
-  if (isCancelled()) return;
-
-  manifest.regions.forEach((r) => {
-    const key = String(r.label);
-    const polydata = geometryCacheRef.current.regions[key];
-    if (!polydata || polydata.getNumberOfPoints() === 0) return;
-
-    if (!ctx.regionActors[key]) {
-      const mapper = vtkMapper.newInstance();
-      mapper.setInputData(polydata);
-      mapper.setScalarVisibility(false); // solid color, no scalars
-      const actor = vtkActor.newInstance();
-      actor.setMapper(mapper);
-      ctx.regionActors[key] = { actor, mapper };
-    }
-
-    const { actor } = ctx.regionActors[key];
-    const isVisible = regionState.visible.includes(r.label);
-    actor.setVisibility(isVisible);
-    const isHighlight = String(regionState.highlight) === key;
-    actor.getProperty().setColor(...hexToRgb01(isHighlight ? HIGHLIGHT_HEX : NEUTRAL_HEX));
-
-    if (isVisible) renderer.addActor(actor);
-  });
 }

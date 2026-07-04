@@ -96,6 +96,12 @@ export function legendBoundaries({ rangeMin, rangeMax, steps }) {
   return out;
 }
 
+// 2-decimal formatter for the diverging (deviation) legend.
+export function fmt2(value) {
+  const v = Math.abs(value) < 5e-3 ? 0 : value;
+  return v.toFixed(2);
+}
+
 // 4-decimal round-half-up (reproduces the article's tabulated legend values).
 export function fmt4(value) {
   const rounded = Math.floor(value * 1e4 + 0.5 + 1e-6) / 1e4;
