@@ -65,7 +65,8 @@ def _new_session(arr, spacing, meta) -> dict:
 
 
 @router.post("/session")
-def create_session(req: LoadReq | None = None) -> dict:
+def create_session() -> dict:
+    """Create a session from the bundled demo scan (no request body needed)."""
     if _DEMO is None:
         raise HTTPException(404, "no demo scan present")
     arr, spacing, meta = pipeline.load_volume_from_source(_DEMO, WORKDIR)

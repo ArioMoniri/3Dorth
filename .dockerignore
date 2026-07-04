@@ -1,0 +1,18 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+app_react/node_modules
+app_react/dist
+app_react/.vite
+outputs
+data
+cache
+*.zip
+Bilateral Omuz BT*/
+.claude-flow
+tests
+docs

@@ -1,0 +1,42 @@
+# 3Dorth deployment. Profiles select which frontend(s) run alongside the API.
+#   docker compose --profile all up -d --build      # API + trame + React
+#   docker compose --profile react up -d --build    # API + React
+#   docker compose --profile trame up -d --build     # API + trame
+# The `api` service has no profile, so it always starts.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    # open3d ships wheels for linux/amd64 only (no linux/arm64). Standard x86
+    # servers run this natively; on Apple Silicon it builds under emulation.
+    platform: linux/amd64
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - ./data:/app/data
+    restart: unless-stopped
+
+  trame:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    platform: linux/amd64
+    command: xvfb-run -a python -m app_trame.app --server --host 0.0.0.0 --port 8080 --timeout 0
+    ports:
+      - "8081:8080"
+    profiles: ["trame", "all"]
+    restart: unless-stopped
+
+  react:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.react
+    ports:
+      - "8088:80"
+    depends_on:
+      - api
+    profiles: ["react", "all"]
+    restart: unless-stopped
