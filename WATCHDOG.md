@@ -19,8 +19,15 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 - Trace high-density voxels (HU max 3071, ~2.5e-5 fraction > 2000 HU) — possible small suture anchor or ceiling saturation; flagged, not a large implant.
 - **Blocked-until-asked (Phase 3):** operated side unknown (no laterality tag). Mode B will split the bilateral volume into L/R halves; confirm operated side with the user then.
 - **Phase 1 refinement:** prefer the native **axial bone-kernel** series for segmentation (primary_series heuristic currently picks the largest reformat); make series user-selectable.
-| 1 | Clean segmentation; region toggles; analysis respects selection | QA render + `test_segmentation.py` | ⬜ |
-| 1 | Mesh in mm, island-removed, smoothed | `test_meshing.py` | ⬜ |
+| 1 | Clean bone segmentation; region labels drive selection | `test_segmentation.py` (4 pass) + real QA render (`scripts/qa_segment.py`) | ✅ |
+| 1 | Mesh in mm, island-removed, smoothed | `test_meshing.py` (3 pass) + real mesh 438k pts | ✅ |
+| 1 | UI region show/hide toggles + highlight | deferred to Phase 5 (labels + `combined_mask()` ready; render proves highlight) | ⬜ |
+
+### Phase 1 findings of record (see outputs/phase1_regions.png)
+- Bone segmentation is anatomically clean (spine, ribs, sternum, both scapulae, clavicles, both humeri visible).
+- Connected-components does NOT isolate a single proximal humerus: at 226 HU the thoracic skeleton is one connected mass. The **left humerus is isolated** (region 4, abducted arm); the **right humerus is fused into the thorax** (adducted arm).
+- Non-bone table/positioning pads (>226 HU) appear as regions 2-3 — filtered via region toggles / clipping (both speced).
+- **Consequence:** isolating the right proximal humerus (or the SNR sub-region) needs the interactive **clip box / plane** tool (Phase 1 interactivity / Phase 2), not CC labeling alone. Left humerus (region 4) is analysis-ready for the Mode A demo.
 | 2 | local-thickness ≈ ray-cast (mean abs ≤ 0.3 mm, r ≥ 0.8) | `test_thickness_agreement.py` | ⬜ |
 | 2 | Fig-2 discrete mm colorbar (7 steps, green→red, ticks) | visual + `test_colorbar.py` | ⬜ |
 | 2 | Line (N pts) + height bracket overlays, mm readouts | `test_measurement.py` | ⬜ |

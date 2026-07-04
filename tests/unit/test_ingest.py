@@ -8,11 +8,13 @@ from pydicom.dataset import Dataset, FileMetaDataset
 from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
 
 from core.ingest import (
+    SeriesInfo,
     compare_scans,
     compute_isotropy,
     enumerate_series,
     find_dicom_root,
     ingest_source,
+    select_bone_series,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -106,6 +108,27 @@ def test_ingest_report_is_deidentified(tmp_path):
         assert phi not in blob
     assert pub["patient_hash"] and len(pub["patient_hash"]) == 8
     assert pub["n_series"] == 1
+
+
+def test_select_bone_series_prefers_axial_bone_kernel():
+    """Mirrors the real archive's series mix; bone-kernel axial must win over
+    the larger sagittal reformat, scout, and dose report."""
+    series = [
+        SeriesInfo(series_uid="a", modality="CT", description="SAGITAL",
+                   n_instances=493, slice_thickness=0.977),
+        SeriesInfo(series_uid="b", modality="CT", description="CORONAL",
+                   n_instances=275, slice_thickness=0.977),
+        SeriesInfo(series_uid="c", modality="CT", description="L+R OMUZ 1.25mm  Bone",
+                   n_instances=195, slice_thickness=1.25),
+        SeriesInfo(series_uid="d", modality="CT", description="L+R OMUZ 1.25mm",
+                   n_instances=195, slice_thickness=1.25),
+        SeriesInfo(series_uid="e", modality="CT", description="Scout",
+                   n_instances=1, slice_thickness=260.0),
+        SeriesInfo(series_uid="f", modality="CT", description="Dose Report",
+                   n_instances=1),
+    ]
+    best = select_bone_series(series)
+    assert best.description == "L+R OMUZ 1.25mm  Bone"
 
 
 # ------------------------------ real-data tests --------------------------- #

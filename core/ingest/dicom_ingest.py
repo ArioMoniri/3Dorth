@@ -82,6 +82,11 @@ class IngestReport(BaseModel):
         cands = [s for s in self.series if s.modality.upper() == "CT"] or self.series
         return max(cands, key=lambda s: s.n_instances, default=None)
 
+    def bone_series(self) -> SeriesInfo | None:
+        """Best series for bone analysis: prefer a native axial bone-kernel
+        reconstruction (matches the paper), penalise reformats/scout/derived."""
+        return select_bone_series(self.series)
+
 
 class DistinctScanResult(BaseModel):
     distinct: bool
@@ -312,6 +317,33 @@ def _combine_laterality(series: list[SeriesInfo]) -> str:
     if "bilateral" in lats or lats >= {"left", "right"}:
         return "bilateral"
     return "/".join(sorted(lats))
+
+
+def select_bone_series(series: list[SeriesInfo], min_instances: int = 20) -> SeriesInfo | None:
+    """Pick the series best suited to cortical-bone analysis.
+
+    Prefers a native axial bone-kernel reconstruction with thin slices and many
+    instances; penalises sagittal/coronal reformats and scout/dose/derived series.
+    """
+    ct = [s for s in series if s.modality.upper() == "CT" and s.n_instances >= min_instances]
+    if not ct:
+        return max(series, key=lambda s: s.n_instances, default=None)
+
+    def score(s: SeriesInfo) -> float:
+        d = (s.description or "").lower()
+        sc = 0.0
+        if "bone" in d:
+            sc += 5.0
+        if any(k in d for k in ("scout", "dose", "report", "saved", "3d", "topogram")):
+            sc -= 20.0
+        if any(k in d for k in ("sagit", "coron", "mpr", "reform")):
+            sc -= 3.0  # prefer native axial over reformats
+        if s.slice_thickness:
+            sc += max(0.0, 3.0 - float(s.slice_thickness))  # thinner is better
+        sc += min(s.n_instances, 400) / 400.0
+        return sc
+
+    return max(ct, key=score)
 
 
 def compare_scans(a: IngestReport, b: IngestReport) -> DistinctScanResult:

@@ -10,6 +10,7 @@ from core.ingest.dicom_ingest import (
     find_dicom_root,
     ingest_source,
     load_series_volume,
+    select_bone_series,
 )
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "compute_isotropy",
     "ingest_source",
     "load_series_volume",
+    "select_bone_series",
     "compare_scans",
 ]
