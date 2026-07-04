@@ -25,6 +25,7 @@ import {
   analyze,
   compare,
   exportResult,
+  fetchRegionThumbnails,
 } from './api';
 import ControlPanel from './ControlPanel';
 import Viewport from './Viewport';
@@ -55,6 +56,13 @@ export default function App() {
 
   // Region selection (analyze returns the list of connected regions).
   const [regionLabel, setRegionLabel] = useState(null);
+
+  // Region thumbnails (visual picker). Fetched lazily and cached per
+  // (session_id, side) so switching side / re-opening doesn't re-render.
+  const [regionThumbs, setRegionThumbs] = useState(null);
+  const [regionThumbsLoading, setRegionThumbsLoading] = useState(false);
+  const [regionThumbsError, setRegionThumbsError] = useState(null);
+  const thumbCacheRef = useRef(new Map()); // key `${sid}|${side}` -> thumbnails[]
 
   // Manual anchor nudge (Mode B deviation).
   const [nudge, setNudge] = useState(ZERO_NUDGE);
@@ -117,6 +125,11 @@ export default function App() {
     setTargetSide(sides[1] ?? sides[0] ?? null);
     setRegionLabel(null);
     setNudge(ZERO_NUDGE);
+    // A new scan invalidates any cached region previews.
+    thumbCacheRef.current = new Map();
+    setRegionThumbs(null);
+    setRegionThumbsLoading(false);
+    setRegionThumbsError(null);
     // A mesh session can't produce a thickness map; force Mode B (deviation).
     if (sess.is_mesh || sess.sides?.[0] === 'mesh') {
       setMode('B');
@@ -170,6 +183,10 @@ export default function App() {
       mirror,
       isMesh,
       manualTransform,
+      // Selecting a different region (via the dropdown OR a thumbnail) must
+      // re-run analyze so the map switches to that structure. Only affects
+      // Mode A thickness (deviation ignores region_label).
+      regionLabel,
       params: relevant,
     });
   }, [
@@ -183,6 +200,7 @@ export default function App() {
     mirror,
     isMesh,
     manualTransform,
+    regionLabel,
   ]);
 
   // Is the current view a deviation view?
@@ -238,7 +256,12 @@ export default function App() {
       if (requestIdRef.current !== myId) return; // superseded — drop stale result
       setThicknessResult(res);
       // Adopt the server's chosen region so the selector reflects reality.
-      if (res.region_label != null) setRegionLabel(res.region_label);
+      // Use the functional form and only change when it actually differs, so
+      // adopting the auto-picked region does NOT spuriously bump the compute
+      // signature (which now includes regionLabel) and cause a redundant run.
+      if (res.region_label != null) {
+        setRegionLabel((prev) => (prev === res.region_label ? prev : res.region_label));
+      }
       setGeometryFromThickness(res);
     } catch (e) {
       if (requestIdRef.current === myId) setComputeError(readableError(e));
@@ -347,6 +370,86 @@ export default function App() {
       setUploading(false);
     }
   }
+
+  // ---- region thumbnails (visual picker) -----------------------------------
+  // Lazily fetch the per-region rendered previews for (session, side) and cache
+  // them. The server render takes ~5-10 s; we show a spinner while it runs and
+  // never re-fetch a cached (session_id, side) pair.
+  async function loadRegionThumbnails(sid, activeSide) {
+    if (!sid || !activeSide) return;
+    const cacheKey = `${sid}|${activeSide}`;
+    const cached = thumbCacheRef.current.get(cacheKey);
+    if (cached) {
+      setRegionThumbs(cached);
+      setRegionThumbsLoading(false);
+      setRegionThumbsError(null);
+      return;
+    }
+    setRegionThumbsLoading(true);
+    setRegionThumbsError(null);
+    setRegionThumbs(null);
+    try {
+      const res = await fetchRegionThumbnails(sid, activeSide);
+      const thumbs = res.thumbnails || [];
+      thumbCacheRef.current.set(cacheKey, thumbs);
+      // Guard against a session/side swap while this was in flight.
+      if (session?.session_id === sid && side === activeSide) {
+        setRegionThumbs(thumbs);
+      }
+    } catch (e) {
+      if (session?.session_id === sid && side === activeSide) {
+        setRegionThumbsError(readableError(e));
+      }
+    } finally {
+      if (session?.session_id === sid && side === activeSide) {
+        setRegionThumbsLoading(false);
+      }
+    }
+  }
+
+  // Trigger the lazy thumbnail load right after the first analyze for the active
+  // side has produced a result (a mesh/volume side with regions). Deviation and
+  // mesh sessions have no per-region volume previews, so we skip them. A cached
+  // (session, side) pair resolves instantly from loadRegionThumbnails.
+  useEffect(() => {
+    if (isDeviationView || isMesh) return;
+    if (!session?.session_id || !side) return;
+    if (!thicknessResult) return; // wait for the first analyze on this side
+    loadRegionThumbnails(session.session_id, side);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.session_id, side, isDeviationView, isMesh, Boolean(thicknessResult)]);
+
+  // ---- realtime public-URL polling -----------------------------------------
+  // Poll GET /api/config every ~6 s so the Share panel reflects a tunnel that
+  // scripts/share.sh (re)starts after sleep/wake — without a page reload. Only
+  // update state when something actually changed to avoid needless re-renders.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const cfg = await fetchConfig();
+        if (cancelled) return;
+        setConfig((prev) => {
+          if (
+            prev &&
+            prev.public === cfg.public &&
+            prev.react_url === cfg.react_url &&
+            prev.trame_url === cfg.trame_url
+          ) {
+            return prev; // unchanged — keep the same reference
+          }
+          return cfg;
+        });
+      } catch {
+        // Transient failure (server restarting) — keep the last known config.
+      }
+    };
+    const id = setInterval(tick, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   // ---- export ---------------------------------------------------------------
   function toggleFormat(f) {
@@ -556,6 +659,9 @@ export default function App() {
           regions={thicknessResult?.regions || null}
           regionLabel={regionLabel}
           onRegionChange={setRegionLabel}
+          regionThumbs={regionThumbs}
+          regionThumbsLoading={regionThumbsLoading}
+          regionThumbsError={regionThumbsError}
           onApply={runAnalyze}
           onCompare={runCompare}
           computing={computing}

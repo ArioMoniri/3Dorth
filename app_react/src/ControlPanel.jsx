@@ -16,6 +16,7 @@
 import ParameterControl from './ParameterControl';
 import ExportPanel from './ExportPanel';
 import ManualAnchor from './ManualAnchor';
+import RegionThumbnails from './RegionThumbnails';
 
 const UPLOAD_ACCEPT = '.zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp';
 
@@ -50,6 +51,10 @@ export default function ControlPanel({
   regions,
   regionLabel,
   onRegionChange,
+  // region thumbnails (visual picker)
+  regionThumbs,
+  regionThumbsLoading,
+  regionThumbsError,
   // actions
   onApply,
   onCompare,
@@ -225,27 +230,43 @@ export default function ControlPanel({
       </section>
 
       {/* ---- region selector ---------------------------------------------- */}
-      {!showDeviation && regions && regions.length > 0 && (
-        <section className="panel-section">
-          <h2>Region</h2>
-          <label className="ctl ctl-enum">
-            <span className="ctl-label">Connected bone region</span>
-            <select
-              value={regionLabel ?? ''}
-              onChange={(e) => onRegionChange(parseInt(e.target.value, 10))}
-            >
-              {regions.map((r) => (
-                <option key={r.label} value={r.label}>
-                  Region {r.label} — {r.volume_cm3.toFixed(1)} cm³
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="panel-hint">
-            Largest connected component is chosen by default. Recompute to switch.
-          </p>
-        </section>
-      )}
+      {!showDeviation &&
+        ((regions && regions.length > 0) ||
+          regionThumbsLoading ||
+          (regionThumbs && regionThumbs.length > 0) ||
+          regionThumbsError) && (
+          <section className="panel-section">
+            <h2>Region</h2>
+            {regions && regions.length > 0 && (
+              <label className="ctl ctl-enum">
+                <span className="ctl-label">Connected bone region</span>
+                <select
+                  value={regionLabel ?? ''}
+                  onChange={(e) => onRegionChange(parseInt(e.target.value, 10))}
+                >
+                  {regions.map((r) => (
+                    <option key={r.label} value={r.label}>
+                      Region {r.label} — {r.volume_cm3.toFixed(1)} cm³
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {/* Visual picker: small rendered image per region. Clicking one
+                selects that region and recomputes. Loads lazily. */}
+            <RegionThumbnails
+              thumbs={regionThumbs}
+              loading={regionThumbsLoading}
+              error={regionThumbsError}
+              activeLabel={regionLabel}
+              onSelect={onRegionChange}
+            />
+            <p className="panel-hint">
+              Largest connected component is chosen by default. Click a preview
+              or use the dropdown to switch — the map recomputes automatically.
+            </p>
+          </section>
+        )}
 
       {/* ---- primary action ------------------------------------------------ */}
       <section className="panel-section">

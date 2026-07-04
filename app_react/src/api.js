@@ -50,6 +50,17 @@ export function fetchConfig() {
   return getJSON('/api/config');
 }
 
+// GET /api/session/{sid}/region-thumbnails?side=<side>
+//   -> { thumbnails: [ { label, volume_cm3, boneness, thumb: url|null } ] }
+// Small per-bone-region renders so the region picker is visual. The compute
+// takes ~5-10 s server-side; callers should show a spinner and cache the result
+// per (session_id, side).
+export function fetchRegionThumbnails(sessionId, side) {
+  return getJSON(
+    `/api/session/${sessionId}/region-thumbnails?side=${encodeURIComponent(side)}`,
+  );
+}
+
 // GET /api/parameters -> { keys, controls, defaults }
 export function fetchParameters() {
   return getJSON('/api/parameters');
