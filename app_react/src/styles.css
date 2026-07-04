@@ -452,6 +452,44 @@ body {
 }
 
 /* ---- primary apply button ------------------------------------------------ */
+.auto-recompute-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted, #8b90b8);
+}
+
+.auto-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fbf6f;
+  flex: 0 0 auto;
+}
+
+.auto-dot.busy {
+  background: var(--accent, #ff8c1a);
+  animation: auto-pulse 0.9s ease-in-out infinite;
+}
+
+.auto-recompute-label {
+  letter-spacing: 0.01em;
+}
+
+@keyframes auto-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
 .apply-btn {
   width: 100%;
   padding: 11px 12px;

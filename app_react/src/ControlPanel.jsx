@@ -249,17 +249,23 @@ export default function ControlPanel({
 
       {/* ---- primary action ------------------------------------------------ */}
       <section className="panel-section">
+        <div className="auto-recompute-row">
+          <span className={`auto-dot${computing ? ' busy' : ''}`} />
+          <span className="auto-recompute-label">
+            {computing ? 'Computing…' : 'Auto-recompute on'}
+          </span>
+        </div>
         {showDeviation ? (
           <button
             className="apply-btn"
             disabled={primaryBusy || referenceSide === targetSide}
             onClick={onCompare}
           >
-            {computing ? 'Computing…' : 'Compute deviation'}
+            {computing ? 'Computing…' : 'Recompute deviation now'}
           </button>
         ) : (
           <button className="apply-btn" disabled={primaryBusy} onClick={onApply}>
-            {computing ? 'Computing…' : 'Apply / Recompute'}
+            {computing ? 'Computing…' : 'Recompute now'}
           </button>
         )}
         {showDeviation && referenceSide === targetSide && (
@@ -268,8 +274,9 @@ export default function ControlPanel({
           </p>
         )}
         <p className="panel-hint">
-          Recompute re-runs the pipeline with the current parameters, so every
-          control below affects the result.
+          Changes apply automatically: display tweaks (colormap, range, steps)
+          re-colour instantly, and pipeline parameters re-run after a short
+          pause. This button forces an immediate recompute — it is optional.
         </p>
       </section>
 

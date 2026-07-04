@@ -15,7 +15,7 @@
 // Parity rule: the parameter panel is generated purely by iterating the controls
 // returned from /api/parameters. No parameter list is hardcoded.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   fetchConfig,
@@ -74,9 +74,23 @@ export default function App() {
   const [computing, setComputing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [computeError, setComputeError] = useState(null);
-  const [geometry, setGeometry] = useState(null); // {url,scalar,rangeMin,...}
+  // `geometry` holds ONLY the server-computed geometry payload (url + scalar
+  // array name). The DISPLAY-ONLY coloring (colormap / range / steps / reverse)
+  // is layered on top client-side in `displayGeometry` (see below), so changing
+  // a display param re-colours instantly with NO server round-trip.
+  const [geometry, setGeometry] = useState(null); // {url, scalar}
   const [thicknessResult, setThicknessResult] = useState(null);
   const [deviationResult, setDeviationResult] = useState(null);
+
+  // Monotonic request-id guard: every compute bumps this; a response is applied
+  // only if it is still the latest request when it resolves, so a slow older
+  // compute can never clobber a newer one (supersede in-flight/pending).
+  const requestIdRef = useRef(0);
+  // Debounce timer for auto-recompute.
+  const debounceRef = useRef(null);
+  // Skip the very first auto-recompute pass (nothing computed yet on mount /
+  // right after a session swap — the user hasn't asked for anything).
+  const autoReadyRef = useRef(false);
 
   // ---- load config + registry + open a session -----------------------------
   useEffect(() => {
@@ -128,6 +142,49 @@ export default function App() {
     setValues((prev) => ({ ...prev, [key]: v }));
   const resetDefaults = () => setValues(defaults);
 
+  // Keys whose change REQUIRES re-running the pipeline. Taken straight from the
+  // registry's `recompute` flag (parity: nothing hardcoded). Display-only keys
+  // (recompute=false: colormap / range / steps / reverse / standardized_view)
+  // are deliberately excluded so they never trigger a server call.
+  const recomputeKeys = useMemo(
+    () => allControls.filter((c) => c.recompute).map((c) => c.key),
+    [allControls],
+  );
+
+  // A stable signature of everything that affects the COMPUTED result: the
+  // recompute=true param values for the active mode, plus the side / mode /
+  // Mode-B view / reference & target sides / mirror / manual-anchor transform.
+  // When this string changes, an auto-recompute is scheduled (debounced). It is
+  // intentionally independent of every display-only param.
+  const computeSignature = useMemo(() => {
+    const relevant = {};
+    recomputeKeys.forEach((k) => {
+      relevant[k] = values[k];
+    });
+    return JSON.stringify({
+      mode,
+      modeBView,
+      side,
+      referenceSide,
+      targetSide,
+      mirror,
+      isMesh,
+      manualTransform,
+      params: relevant,
+    });
+  }, [
+    recomputeKeys,
+    values,
+    mode,
+    modeBView,
+    side,
+    referenceSide,
+    targetSide,
+    mirror,
+    isMesh,
+    manualTransform,
+  ]);
+
   // Is the current view a deviation view?
   const isDeviationView = (mode === 'B' && modeBView === 'deviation') || isMesh;
 
@@ -147,8 +204,15 @@ export default function App() {
   }
 
   // ---- primary actions ------------------------------------------------------
+  // Both compute actions are guarded by a monotonic request id. On entry each
+  // bumps `requestIdRef` and captures its own `myId`; after every await it checks
+  // `requestIdRef.current === myId` before mutating any state, so a stale (older
+  // or superseded) response can never overwrite a newer one. `computing` is only
+  // cleared by the request that is still the latest, so the indicator reflects
+  // the in-flight compute, not a stale one that just resolved.
   async function runAnalyze() {
     if (!session || !side || isMesh) return;
+    const myId = (requestIdRef.current += 1);
     setComputing(true);
     setComputeError(null);
     try {
@@ -159,6 +223,7 @@ export default function App() {
         res = await analyze(sid, args);
       } catch (e) {
         if (e?.status === 404) {
+          if (requestIdRef.current !== myId) return;
           const fresh = await ensureSession();
           sid = fresh.session_id;
           // The fresh session may expose different sides; pick a valid one.
@@ -170,19 +235,21 @@ export default function App() {
           throw e;
         }
       }
+      if (requestIdRef.current !== myId) return; // superseded — drop stale result
       setThicknessResult(res);
       // Adopt the server's chosen region so the selector reflects reality.
       if (res.region_label != null) setRegionLabel(res.region_label);
       setGeometryFromThickness(res);
     } catch (e) {
-      setComputeError(readableError(e));
+      if (requestIdRef.current === myId) setComputeError(readableError(e));
     } finally {
-      setComputing(false);
+      if (requestIdRef.current === myId) setComputing(false);
     }
   }
 
   async function runCompare() {
     if (!session || referenceSide === targetSide) return;
+    const myId = (requestIdRef.current += 1);
     setComputing(true);
     setComputeError(null);
     try {
@@ -194,6 +261,7 @@ export default function App() {
         res = await compare(sid, args);
       } catch (e) {
         if (e?.status === 404) {
+          if (requestIdRef.current !== myId) return;
           const fresh = await ensureSession();
           sid = fresh.session_id;
           const sides = fresh.sides || [];
@@ -206,12 +274,13 @@ export default function App() {
           throw e;
         }
       }
+      if (requestIdRef.current !== myId) return; // superseded — drop stale result
       setDeviationResult(res);
       setGeometryFromDeviation(res);
     } catch (e) {
-      setComputeError(readableError(e));
+      if (requestIdRef.current === myId) setComputeError(readableError(e));
     } finally {
-      setComputing(false);
+      if (requestIdRef.current === myId) setComputing(false);
     }
   }
 
@@ -219,6 +288,52 @@ export default function App() {
     setReferenceSide(targetSide);
     setTargetSide(referenceSide);
   }
+
+  // Run whichever compute matches the current view, if its preconditions hold.
+  // Deviation view -> compare (needs two distinct sides); otherwise -> analyze
+  // (needs a side, non-mesh). Returns true if a compute was actually started.
+  function runActiveCompute() {
+    if (isDeviationView) {
+      if (!session || referenceSide === targetSide) return false;
+      runCompare();
+      return true;
+    }
+    if (!session || !side || isMesh) return false;
+    runAnalyze();
+    return true;
+  }
+
+  // Keep a ref to the latest action so the debounce effect can call it without
+  // depending on the function's changing identity (which would re-fire the
+  // effect on every render). The effect depends ONLY on `computeSignature`.
+  const runActiveComputeRef = useRef(runActiveCompute);
+  runActiveComputeRef.current = runActiveCompute;
+
+  // ---- debounced AUTO-RECOMPUTE --------------------------------------------
+  // Whenever the compute signature changes (a recompute=true param, side, mode,
+  // Mode-B view, reference/target side, mirror, or the manual-anchor transform),
+  // wait ~600 ms after the LAST change and then fire exactly one compute. Rapid
+  // changes (dragging a slider) coalesce into a single request; the request-id
+  // guard inside runAnalyze/runCompare supersedes any older in-flight compute so
+  // a stale response can never clobber the latest. Display-only param changes do
+  // not appear in the signature, so they never reach here.
+  useEffect(() => {
+    // Skip the initial pass: on mount / right after a session swap there is
+    // nothing to recompute until the signature actually changes.
+    if (!autoReadyRef.current) {
+      autoReadyRef.current = true;
+      return undefined;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      runActiveComputeRef.current();
+    }, 600);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computeSignature]);
 
   async function onUpload(file) {
     setUploading(true);
@@ -313,28 +428,59 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeviationView]);
 
+  // Store ONLY the geometry payload (mesh url + scalar array name). The coloring
+  // is derived from the current display params in `displayGeometry`, so a
+  // colormap / range / steps / reverse change re-colours instantly client-side.
   function setGeometryFromThickness(res) {
-    setGeometry({
-      url: res.geometry_url,
-      scalar: res.scalar,
-      rangeMin: res.scalar_range[0],
-      rangeMax: res.scalar_range[1],
-      steps: res.steps,
-      colormap: res.colormap,
-      reverse: Boolean(values.mode_a_colormap_reverse),
-    });
+    setGeometry({ url: res.geometry_url, scalar: res.scalar });
   }
   function setGeometryFromDeviation(res) {
-    setGeometry({
-      url: res.geometry_url,
-      scalar: res.scalar,
-      rangeMin: res.scalar_range[0],
-      rangeMax: res.scalar_range[1],
-      steps: res.steps,
-      colormap: res.colormap,
-      reverse: false,
-    });
+    setGeometry({ url: res.geometry_url, scalar: res.scalar });
   }
+
+  // Layer the DISPLAY-ONLY coloring (recompute=false params) on top of the
+  // server geometry, replicating the server's own scalar_range / steps math
+  // (see api/routers/session.py) so the client-side legend and LUT match a
+  // recompute exactly — but WITHOUT a server call. Changing any of these keys
+  // re-derives this memo synchronously; Viewport + Legend read from it and
+  // re-colour instantly.
+  const displayGeometry = useMemo(() => {
+    if (!geometry) return null;
+    if (isDeviationView) {
+      const center = Number(values.mode_b_center ?? 0);
+      const abs = Number(values.mode_b_range_abs ?? 1);
+      return {
+        url: geometry.url,
+        scalar: geometry.scalar,
+        rangeMin: center - abs,
+        rangeMax: center + abs,
+        steps: Number(values.mode_b_colorbar_steps ?? 11),
+        colormap: values.mode_b_colormap ?? 'blue_white_red',
+        reverse: false,
+      };
+    }
+    return {
+      url: geometry.url,
+      scalar: geometry.scalar,
+      rangeMin: Number(values.mode_a_range_min ?? 0),
+      rangeMax: Number(values.mode_a_range_max ?? 1),
+      steps: Number(values.mode_a_colorbar_steps ?? 11),
+      colormap: values.mode_a_colormap ?? 'green_yellow_red',
+      reverse: Boolean(values.mode_a_colormap_reverse),
+    };
+  }, [
+    geometry,
+    isDeviationView,
+    values.mode_a_range_min,
+    values.mode_a_range_max,
+    values.mode_a_colorbar_steps,
+    values.mode_a_colormap,
+    values.mode_a_colormap_reverse,
+    values.mode_b_center,
+    values.mode_b_range_abs,
+    values.mode_b_colorbar_steps,
+    values.mode_b_colormap,
+  ]);
 
   if (error) {
     return (
@@ -353,8 +499,10 @@ export default function App() {
     return <div className="loading">Loading registry &amp; opening session…</div>;
   }
 
-  const showDeviationLegend = isDeviationView && deviationResult && geometry;
-  const showThicknessLegend = !isDeviationView && thicknessResult && geometry;
+  const showDeviationLegend =
+    isDeviationView && deviationResult && displayGeometry;
+  const showThicknessLegend =
+    !isDeviationView && thicknessResult && displayGeometry;
   const activeResult = isDeviationView ? deviationResult : thicknessResult;
   const activeMean = activeResult?.stats?.mean;
 
@@ -430,25 +578,25 @@ export default function App() {
           exporting={exporting}
           exportFiles={exportFiles}
           exportError={exportError}
-          canExport={Boolean(geometry)}
+          canExport={Boolean(displayGeometry)}
         />
 
         <main className="viewport-wrap">
           <Viewport
-            geometry={geometry}
+            geometry={displayGeometry}
             onHover={setHover}
             cameraPose={camera}
           />
 
-          {geometry && (
+          {displayGeometry && (
             <HoverTooltip
               hover={hover}
-              scalar={geometry.scalar}
+              scalar={displayGeometry.scalar}
               mean={activeMean}
             />
           )}
 
-          {!geometry && !computing && (
+          {!displayGeometry && !computing && (
             <div className="viewport-empty">
               <div className="viewport-empty-card">
                 <div className="viewport-empty-title">
@@ -488,22 +636,22 @@ export default function App() {
           <div className="right-overlay">
             {showThicknessLegend && (
               <Legend
-                rangeMin={geometry.rangeMin}
-                rangeMax={geometry.rangeMax}
-                steps={geometry.steps}
-                reverse={geometry.reverse}
-                colormap={geometry.colormap}
+                rangeMin={displayGeometry.rangeMin}
+                rangeMax={displayGeometry.rangeMax}
+                steps={displayGeometry.steps}
+                reverse={displayGeometry.reverse}
+                colormap={displayGeometry.colormap}
                 title={`Cortical thickness (mm) — ${cap(side)}`}
               />
             )}
             {showDeviationLegend && (
               <Legend
                 diverging
-                rangeMin={geometry.rangeMin}
-                rangeMax={geometry.rangeMax}
-                steps={geometry.steps}
-                reverse={geometry.reverse}
-                colormap={geometry.colormap}
+                rangeMin={displayGeometry.rangeMin}
+                rangeMax={displayGeometry.rangeMax}
+                steps={displayGeometry.steps}
+                reverse={displayGeometry.reverse}
+                colormap={displayGeometry.colormap}
                 title={`Signed deviation (mm) — ${cap(targetSide)} vs ${cap(
                   referenceSide,
                 )}`}

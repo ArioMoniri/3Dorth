@@ -368,9 +368,44 @@ def _enable_hover() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Realtime auto-recompute plumbing.
+#
+# Every change to a recompute=True parameter (or to side / mode / b_view /
+# reference / target / mirror / manual-anchor) SCHEDULES a debounced background
+# recompute — the user never has to click Apply. Rapid changes (e.g. dragging a
+# slider) are coalesced: we (re)arm a ~600 ms timer and only the final change
+# fires. A monotonically increasing request id supersedes older computes so a
+# slow, stale result can never overwrite a newer one (the AbortController
+# analogue for a server-side app).
+# --------------------------------------------------------------------------- #
+RECOMPUTE_DEBOUNCE_S = 0.6
+
+_REQ_LOCK = threading.Lock()
+_REQ_COUNTER = 0          # latest scheduled request id (monotonic)
+_DEBOUNCE_TIMER: threading.Timer | None = None
+
+
+def _next_request_id() -> int:
+    """Reserve a fresh, strictly-increasing request id (supersedes older ones)."""
+    global _REQ_COUNTER
+    with _REQ_LOCK:
+        _REQ_COUNTER += 1
+        return _REQ_COUNTER
+
+
+def _is_current(req_id: int) -> bool:
+    """True while ``req_id`` is still the newest scheduled compute."""
+    with _REQ_LOCK:
+        return req_id == _REQ_COUNTER
+
+
+# --------------------------------------------------------------------------- #
 # Compute (runs on a background thread).
 # --------------------------------------------------------------------------- #
-def _compute_worker():
+def _compute_worker(req_id: int | None = None):
+    # A stale request (superseded before it even started) is dropped.
+    if req_id is not None and not _is_current(req_id):
+        return
     try:
         params = _params_from_state()
         with _LOCK:
@@ -437,6 +472,11 @@ def _compute_worker():
                  ("removed vol (cc)", f"{st['removed_volume_cc']:.2f}")],
             )
 
+        # SUPERSEDE guard: if a newer change landed while this compute ran, drop
+        # our result silently — the newer request owns the viewport now.
+        if req_id is not None and not _is_current(req_id):
+            return
+
         _enable_hover()
         with state:
             state.stats_html = html_out
@@ -446,6 +486,9 @@ def _compute_worker():
             ctrl.view_update()
         state.flush()
     except Exception as e:  # noqa: BLE001
+        # Don't surface an error from a compute that has already been superseded.
+        if req_id is not None and not _is_current(req_id):
+            return
         traceback.print_exc()
         with state:
             state.status = "error"
@@ -458,20 +501,114 @@ def _side_label(name: str) -> str:
             "mesh": "Mesh"}.get(name, name.capitalize())
 
 
+def _computing_msg() -> str:
+    return ("Computing… (Mode B deviation involves registration and can take a "
+            "while)" if (state.mode == "B" and state.b_view == "deviation")
+            else "Computing…")
+
+
 def recompute(*_a, **_k):
-    """Kick off a background recompute with the CURRENT params/mode/side."""
-    if state.status == "computing":
-        return
+    """Kick off a background recompute NOW with the CURRENT params/mode/side.
+
+    Bumps the request id so any in-flight/pending compute is superseded — the
+    UI never stalls and an older result can't overwrite this one. Used both by
+    the manual "Apply / Recompute" button and by the debounced auto path.
+    """
+    req_id = _next_request_id()
     with state:
         state.status = "computing"
-        state.status_msg = ("Computing… (Mode B deviation involves registration "
-                            "and can take a while)" if (state.mode == "B" and
-                            state.b_view == "deviation") else "Computing…")
+        state.status_msg = _computing_msg()
     state.flush()
-    threading.Thread(target=_compute_worker, daemon=True).start()
+    threading.Thread(target=_compute_worker, args=(req_id,), daemon=True).start()
+
+
+def schedule_recompute(*_a, **_k):
+    """Debounced auto-recompute: coalesce rapid changes into ONE compute.
+
+    Re-arms a ~600 ms timer on every call; only the last change in a burst
+    actually fires ``recompute``. A "computing…" status is shown immediately so
+    the user sees the pending state while they keep dragging. Coloring stays
+    instant during the wait because display-only knobs never route here.
+    """
+    global _DEBOUNCE_TIMER
+    if not SESSION.get("sides"):
+        return  # nothing loaded yet; nothing to compute
+    with _REQ_LOCK:
+        if _DEBOUNCE_TIMER is not None:
+            _DEBOUNCE_TIMER.cancel()
+        _DEBOUNCE_TIMER = threading.Timer(RECOMPUTE_DEBOUNCE_S, recompute)
+        _DEBOUNCE_TIMER.daemon = True
+        _DEBOUNCE_TIMER.start()
+    # Show the pending indicator right away (non-blocking; UI stays interactive).
+    if state.status != "computing":
+        with state:
+            state.status = "computing"
+            state.status_msg = _computing_msg()
+        state.flush()
 
 
 ctrl.recompute = recompute
+ctrl.schedule_recompute = schedule_recompute
+
+
+# --------------------------------------------------------------------------- #
+# Instant DISPLAY-ONLY re-render (no server recompute).
+#
+# Colormap / range / colorbar-steps / reverse / center / |range| / view changes
+# only affect how the EXISTING geometry is colored or framed. We re-run the
+# pyvista scene builder on the LAST computed mesh with the new params — updating
+# the LUT / scalar-bar / camera in place — without touching the pipeline. This
+# stays instant even while a recompute is running in the background.
+# --------------------------------------------------------------------------- #
+def apply_display_only(*_a, **_k):
+    """Recolor the current surface from the last mesh using the live params."""
+    params = _params_from_state()
+    diverging = state.mode == "B" and state.b_view == "deviation"
+    mesh = _LAST_MESH["deviation"] if diverging else _LAST_MESH["thickness"]
+    if mesh is None:
+        return  # nothing rendered yet; the next compute will pick up the params
+    try:
+        if diverging:
+            build_deviation_scene(PLOTTER, mesh, params=params)
+        else:
+            build_thickness_scene(PLOTTER, mesh, params=params,
+                                  side_label=_side_label(state.side))
+        _enable_hover()
+        if ctrl.view_update:
+            ctrl.view_update()
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
+ctrl.apply_display_only = apply_display_only
+
+
+# --------------------------------------------------------------------------- #
+# Wire realtime reactivity: bind every control to the right path so ANY change
+# reflects automatically — no Apply click required.
+#
+#   * recompute=True params  -> debounced background recompute (superseding)
+#   * display-only params    -> instant client-side recolor/reframe (no compute)
+#   * session selectors       -> recompute (side/mode/b_view/ref/tgt)
+#   * manual-anchor knobs     -> recompute (only bite when manual_enabled)
+#
+# Parity is preserved: which params are display-only vs recompute comes straight
+# from the registry (``P.DISPLAY_ONLY_KEYS`` / the ``recompute`` flag the API
+# also serves), so the two frontends agree on the classification.
+# --------------------------------------------------------------------------- #
+_RECOMPUTE_PARAM_KEYS = [c["key"] for c in control_specs() if c["recompute"]]
+_DISPLAY_ONLY_PARAM_KEYS = [c["key"] for c in control_specs() if not c["recompute"]]
+# Non-registry selectors / knobs that also require a fresh pipeline run.
+_RECOMPUTE_STATE_KEYS = [
+    "side", "mode", "b_view", "ref_side", "tgt_side",
+    "manual_enabled", "manual_tx", "manual_ty", "manual_tz",
+    "manual_rx", "manual_ry", "manual_rz",
+]
+
+for _k in _RECOMPUTE_PARAM_KEYS + _RECOMPUTE_STATE_KEYS:
+    state.change(_k)(schedule_recompute)
+for _k in _DISPLAY_ONLY_PARAM_KEYS:
+    state.change(_k)(apply_display_only)
 
 
 # --------------------------------------------------------------------------- #
@@ -708,10 +845,16 @@ with SinglePageWithDrawerLayout(server) as layout:
                 v3.VSelect(v_model=("tgt_side",), items=("side_options",),
                            label="Target side", density="compact",
                            hide_details=True, variant="outlined")
-            v3.VBtn("Apply / Recompute", block=True, color="primary",
+            # Changes now auto-recompute (debounced); this button is an OPTIONAL
+            # manual "recompute now" — it is no longer required.
+            v3.VBtn("Recompute now", block=True, color="primary",
                     classes="mt-3", click=ctrl.recompute,
                     loading=("status === 'computing'",),
-                    disabled=("status === 'computing'",))
+                    prepend_icon="mdi-refresh", variant="tonal")
+            html.Div(
+                "Every change applies automatically — coloring instantly, "
+                "analysis after a brief pause. This button just forces it now.",
+                style="font-size:11px;color:#888;margin-top:4px;line-height:1.4")
 
             v3.VDivider(classes="my-3")
 
@@ -755,9 +898,9 @@ with SinglePageWithDrawerLayout(server) as layout:
                 with v3.VExpansionPanelText():
                     html.Div(
                         "Nudge the auto-registration: translate/rotate the target "
-                        "over the reference, then Apply / Recompute. Use the "
-                        "reference/target selectors above to choose which side is "
-                        "on top.",
+                        "over the reference. Changes auto-recompute (debounced). "
+                        "Use the reference/target selectors above to choose which "
+                        "side is on top.",
                         style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.4")
                     v3.VSwitch(v_model=("manual_enabled",),
                                label="Apply manual nudge", density="compact",
@@ -784,10 +927,10 @@ with SinglePageWithDrawerLayout(server) as layout:
                     v3.VSlider(v_model=("manual_rz",), label="rz", min=-30, max=30,
                                step=0.5, thumb_label=True, density="compact",
                                hide_details=True, disabled=("!manual_enabled",))
-                    v3.VBtn("Apply nudge & recompute", block=True, size="small",
+                    v3.VBtn("Recompute now", block=True, size="small",
                             color="primary", variant="tonal", classes="mt-3",
-                            click=ctrl.recompute,
-                            disabled=("status === 'computing'",))
+                            prepend_icon="mdi-refresh",
+                            click=ctrl.recompute)
 
             # Export panel.
             with v3.VExpansionPanel(title="Export"):
@@ -871,7 +1014,7 @@ def _bootstrap():
         _load_source(DEMO_ZIP, layout="bilateral")
         with state:
             _refresh_session_ui()
-            state.status_msg = "Demo scan loaded. Hit Apply / Recompute."
+            state.status_msg = "Demo scan loaded. Computing…"
         state.flush()
         recompute()
     except Exception as e:  # noqa: BLE001
