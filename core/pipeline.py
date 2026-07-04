@@ -22,6 +22,7 @@ from core.ingest import (
     load_nifti_volume,
     load_series_volume,
 )
+import core.resources as R
 from core.ingest import load_mesh_source as _load_mesh_source
 from core.meshing import mask_to_mesh
 from core.segmentation import segment_bone
@@ -51,7 +52,7 @@ def load_volume_from_source(path, workdir) -> tuple[np.ndarray, tuple, dict]:
         meta.setdefault("series", Path(path).name)
         meta.setdefault("laterality", "unknown")
         meta.setdefault("patient_hash", "unknown0")
-        return arr, spacing, meta
+        return _bound_volume(arr, spacing, meta)
 
     rep = ingest_source(path, workdir, load_pixels=False)
     bs = rep.bone_series()
@@ -63,12 +64,20 @@ def load_volume_from_source(path, workdir) -> tuple[np.ndarray, tuple, dict]:
     meta = {
         "format": "dicom",
         "series": bs.description,
-        "shape": list(arr.shape),
-        "spacing_mm": [round(s, 3) for s in spacing],
         "laterality": rep.laterality,
         "patient_hash": rep.patient_hash,
     }
-    return arr, spacing, meta
+    return _bound_volume(arr, spacing, meta)
+
+
+def _bound_volume(arr, spacing, meta):
+    """Keep RAM bounded: block-downsample oversized volumes and store HU as int16
+    (half the memory of float32). Records the resulting shape/spacing in meta."""
+    arr, spacing = R.downsample_to_budget(arr, spacing)
+    arr = R.as_hu_int16(arr)
+    meta["shape"] = list(arr.shape)
+    meta["spacing_mm"] = [round(float(s), 3) for s in spacing]
+    return arr, tuple(float(s) for s in spacing), meta
 
 
 def load_mesh_source(path) -> pv.PolyData:
@@ -238,7 +247,9 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     normals = np.asarray(mesh.point_normals)
 
     lo, hi = params.thickness_min_clamp, params.thickness_max_clamp
-    iso = max(0.6, min(spacing))
+    # adaptive: coarser iso for large crops so the local-thickness grid (and RAM)
+    # stays bounded on any device
+    iso = R.adaptive_iso(sub.shape, spacing)
     if params.thickness_algorithm == "ray_cast":
         th = raycast_thickness_on_vertices(verts, normals, sub, spacing, max_mm=hi + 5)
     else:

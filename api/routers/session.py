@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import core.parameters as P
+import core.resources as R
 from core import pipeline
 from core.export import export_bundle
 
@@ -79,7 +80,14 @@ def _params(d: dict) -> "P.Parameters":
         raise HTTPException(422, f"invalid parameters: {e}")
 
 
+def _evict_old_sessions() -> None:
+    """Keep at most R.MAX_SESSIONS scans in memory; drop the oldest (bounds RAM)."""
+    while len(SESSIONS) >= R.MAX_SESSIONS:
+        SESSIONS.pop(next(iter(SESSIONS)), None)
+
+
 def _new_session(arr, spacing, meta, layout: str = "auto") -> dict:
+    _evict_old_sessions()
     sid = uuid.uuid4().hex[:12]
     sides = pipeline.split_sides(arr, spacing, layout=layout)
     SESSIONS[sid] = {"arr": arr, "spacing": spacing, "meta": meta, "sides": sides}
@@ -89,6 +97,7 @@ def _new_session(arr, spacing, meta, layout: str = "auto") -> dict:
 
 def _new_mesh_session(mesh, meta) -> dict:
     """Create a session holding a single surface mesh (no volume analysis)."""
+    _evict_old_sessions()
     sid = uuid.uuid4().hex[:12]
     SESSIONS[sid] = {"arr": None, "spacing": None, "meta": meta,
                      "sides": {"mesh": {"mesh": mesh, "side": "mesh",
@@ -168,9 +177,10 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
         raise HTTPException(400, f"unknown side '{req.side}'")
     params = _params(req.params)
     try:
-        res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
-                                         region_label=req.region_label,
-                                         offset_xyz=side["offset_xyz"])
+        with R.COMPUTE_SEMAPHORE:  # bound concurrent heavy computes (peak RAM)
+            res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
+                                             region_label=req.region_label,
+                                             offset_xyz=side["offset_xyz"])
     except ValueError as e:
         raise HTTPException(422, str(e))
     key = hashlib.sha256(
@@ -200,8 +210,9 @@ def compare(sid: str, req: CompareReq) -> dict:
         raise HTTPException(400, "unknown side(s)")
     params = _params(req.params)
     try:
-        res = pipeline.compare_sides(ref, tgt, params,
-                                     manual_transform=req.manual_transform)
+        with R.COMPUTE_SEMAPHORE:  # bound concurrent heavy computes (peak RAM)
+            res = pipeline.compare_sides(ref, tgt, params,
+                                         manual_transform=req.manual_transform)
     except NotImplementedError as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
