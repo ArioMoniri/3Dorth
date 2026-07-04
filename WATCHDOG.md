@@ -41,7 +41,10 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 | 3 | Signed-distance sign verified on synthetic point | `test_deviation_sign.py` | ⬜ |
 | 3 | Two distance libs agree (median abs ≤ 0.2 mm) | `test_deviation_agreement.py` | ⬜ |
 | 4 | Table-1 summary CSV+JSON; histograms; %>1/2 mm; volume | `test_stats.py` | ⬜ |
-| 5 | Both UIs render controls from registry; every feature reachable | `test_parity.py` | ⬜ |
+| 5 | Parity: both UIs' control source == registry | `test_parity.py` (4 pass; API `/api/parameters` + trame both == registry) | ✅ |
+| 5 | Frontend 1 (trame) renders controls from registry + viewport | app constructs (27 controls); scene renders Fig-2 map from VTP bundle | ✅ |
+| 5 | Frontend 2 (React + vtk.js) at parity | building against the API contract | 🟡 |
+| 5 | Both frontends launch + every feature reachable | manual launch check | ⬜ |
 | 6 | Both frontends launch via compose; re-run reproduces stats | manual + `test_reproducibility.py` | ⬜ |
 
 ## Standing invariants (checked every run)
