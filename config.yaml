@@ -1,0 +1,33 @@
+parameters:
+  hu_lower: 226
+  hu_upper: 1600
+  metal_hu_cutoff: 2000
+  island_min_voxels: 2000
+  resample_iso_voxel: 0.0
+  thickness_algorithm: local_thickness
+  thickness_min_clamp: 0.33
+  thickness_max_clamp: 10.0
+  mode_a_colormap: green_yellow_red
+  mode_a_colormap_reverse: false
+  mode_a_range_min: 0.1537
+  mode_a_range_max: 6.5202
+  mode_a_colorbar_steps: 7
+  measure_line_points: 3
+  height_axis: z
+  reg_voxel_size: 2.0
+  reg_icp_iters: 50
+  anchor_region: auto
+  mirror_sagittal: false
+  mode_b_reference: scan_a
+  signed_distance_sign: target_outside_positive
+  mode_b_colormap: blue_white_red
+  mode_b_center: 0.0
+  mode_b_range_abs: 5.0
+  mesh_smooth_iters: 20
+  mesh_decimate_fraction: 0.0
+  standardized_view: anterior
+meta:
+  project: "3Dorth \u2014 3D bone cortical mapping & comparison"
+  reference: Guo et al. 2022, Eur J Med Res 27:102, doi:10.1186/s40001-022-00724-w
+  reproduced_software: Mimics 21.0 + 3-Matic 12.0 (this tool reproduces open-source)
+  note: Research tooling, not a clinical diagnostic. All outputs de-identified.

@@ -1,0 +1,46 @@
+# WATCHDOG — living verification ledger
+
+The watchdog is the project's independent verifier. It trusts nothing that is
+not checked. Automated checks live in `scripts/watchdog.py` (run:
+`.venv/bin/python scripts/watchdog.py`). This file is the human-readable ledger:
+every acceptance criterion maps to a **verification method** and a **status**.
+
+Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ blocked
+
+## Phase gates
+| Phase | Gate | Verify by | Status |
+|---|---|---|---|
+| 0 | Ingest recurses to `dicom/`; findings table (geometry/laterality/hardware/distinct) | `pytest tests/unit/test_ingest.py` (14 pass); ran `scripts/ingest_report.py` | ✅ |
+| 0 | Registry loads; config round-trips | watchdog check `registry`, `config_roundtrip` | ✅ |
+
+### Phase 0 findings of record (see outputs/phase0_ingest.json)
+- The two ZIPs are the **same** study (patient_hash `1919df63`, identical primary SeriesInstanceUID) — the `(1)` file is a duplicate. **Not** two separate scans.
+- Single **bilateral** shoulder CT ("L+R OMUZ"): bone-kernel axial (195 sl, 0.977×0.977×1.25 mm), soft-tissue axial, 0.977 mm isotropic sagittal (493) / coronal (275) reformats, plus scout/dose/derived.
+- Trace high-density voxels (HU max 3071, ~2.5e-5 fraction > 2000 HU) — possible small suture anchor or ceiling saturation; flagged, not a large implant.
+- **Blocked-until-asked (Phase 3):** operated side unknown (no laterality tag). Mode B will split the bilateral volume into L/R halves; confirm operated side with the user then.
+- **Phase 1 refinement:** prefer the native **axial bone-kernel** series for segmentation (primary_series heuristic currently picks the largest reformat); make series user-selectable.
+| 1 | Clean segmentation; region toggles; analysis respects selection | QA render + `test_segmentation.py` | ⬜ |
+| 1 | Mesh in mm, island-removed, smoothed | `test_meshing.py` | ⬜ |
+| 2 | local-thickness ≈ ray-cast (mean abs ≤ 0.3 mm, r ≥ 0.8) | `test_thickness_agreement.py` | ⬜ |
+| 2 | Fig-2 discrete mm colorbar (7 steps, green→red, ticks) | visual + `test_colorbar.py` | ⬜ |
+| 2 | Line (N pts) + height bracket overlays, mm readouts | `test_measurement.py` | ⬜ |
+| 3 | Anchor ICP RMS < 1.0 mm; overlay aligned | `test_registration.py` | ⬜ |
+| 3 | Signed-distance sign verified on synthetic point | `test_deviation_sign.py` | ⬜ |
+| 3 | Two distance libs agree (median abs ≤ 0.2 mm) | `test_deviation_agreement.py` | ⬜ |
+| 4 | Table-1 summary CSV+JSON; histograms; %>1/2 mm; volume | `test_stats.py` | ⬜ |
+| 5 | Both UIs render controls from registry; every feature reachable | `test_parity.py` | ⬜ |
+| 6 | Both frontends launch via compose; re-run reproduces stats | manual + `test_reproducibility.py` | ⬜ |
+
+## Standing invariants (checked every run)
+| Invariant | Verify by | Status |
+|---|---|---|
+| No patient PHI in tracked files / outputs | watchdog `deidentify` scan (no "RESIT"/"ENGINAR") | ✅ |
+| Patient ZIPs never staged in git | watchdog `git_phi` check | ✅ |
+| `config.yaml` == article defaults on fresh load | watchdog `config_roundtrip` | ✅ |
+| Sign conventions asserted before any Mode B result | `test_deviation_sign.py` | ⬜ |
+| Every reported number traces to data/fixture | code review + watchdog `no_fabrication` note | 🟡 |
+
+## How the watchdog challenges
+- It re-derives, it does not re-read a claim. "Tests pass" means it ran them.
+- A gate flips to ✅ only when its named verification actually executes green.
+- On any red, downstream phases stay ⬜ — no building on an unverified base.

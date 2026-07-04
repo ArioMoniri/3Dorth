@@ -1,0 +1,24 @@
+[project]
+name = "threedorth"
+version = "0.0.1"
+description = "General 3D bone cortical-mapping & comparison from CT (dual UI)"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "realdata: tests that need the local patient CT (skipped if absent)",
+    "slow: long-running tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "api*"]

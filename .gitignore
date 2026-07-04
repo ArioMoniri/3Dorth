@@ -1,0 +1,48 @@
+# ---- Patient data / PHI: NEVER commit ----
+Bilateral Omuz BT Jul 4 2026/
+data/raw/
+data/*.zip
+*.zip
+*.dcm
+*.DCM
+dicom/
+DICOM/
+*.nii
+*.nii.gz
+
+# ---- Large derived artifacts ----
+outputs/
+!outputs/.gitkeep
+cache/
+*.stl
+*.ply
+*.vtp
+*.glb
+*.gltf
+*.vtk
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Node / React ----
+node_modules/
+app_react/dist/
+app_react/.vite/
+
+# ---- Claude-flow runtime ----
+.claude-flow/
+
+# ---- OS / editor ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
