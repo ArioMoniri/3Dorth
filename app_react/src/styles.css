@@ -1527,6 +1527,29 @@ body {
   margin: 6px 10px;
 }
 
+/* ---- Phase VII+: two-box matched oblique compare ------------------------- */
+.oblique-compare-wrap {
+  overflow-y: auto;
+}
+.oblique-compare-grid {
+  flex: 1 1 320px;
+  min-height: 260px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 6px;
+  background: #101014;
+}
+.oblique-compare-grid .compare-pane {
+  min-height: 220px;
+}
+.oblique-compare-grid .oblique-image-box {
+  flex: 1 1 auto;
+}
+.oblique-compare-wrap .oblique-controls {
+  flex: 0 0 auto;
+}
+
 /* ===== Phase V: View in AR / 3D ============================================ */
 .ar-launch-btn {
   margin-left: auto;

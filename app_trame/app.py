@@ -428,12 +428,32 @@ state.oblique_normal = [0.0, 0.0, 1.0]   # unit normal, from the widget (app fra
 state.oblique_window = mpr.BONE_WINDOW
 state.oblique_level = mpr.BONE_LEVEL
 state.oblique_size_mm = 220.0
-state.oblique_img = ""             # data:image/png;base64,... reformat
+state.oblique_img = ""             # data:image/png;base64,... reformat (single-side fallback)
 state.oblique_note = (
     "Research / de-identified — not for diagnostic use. The plane is an "
     "ARBITRARY tilt in the app frame (array-oriented X/Y/Z or 'oblique') — "
     "never radiological A/P/S/I or laterality. Drag the 3D plane widget; the "
     "2D reformat is sampled directly on that plane, matched at every pixel.")
+
+# --- Oblique COMPARE (bilateral): both bones' 2D reformats, one movable plane -- #
+# When the session is bilateral (two volume sides), the oblique widget lives on
+# the REFERENCE side; the SAME physical cut is mapped through the cached
+# compare_registration 4x4 (core.pipeline.map_plane) onto the TARGET side, so
+# two boxes ("Reference bone" / "Target bone") show the matched cross-section.
+# Single-sided/mesh sessions keep the existing single-panel oblique above.
+state.oblique_bilateral = False        # true when both boxes are shown (else single panel)
+state.oblique_ref_side = ""            # side backing the "Reference bone" box
+state.oblique_tgt_side = ""            # side backing the "Target bone" box
+state.oblique_ref_img = ""             # data:image/png;base64,... reference reformat
+state.oblique_tgt_img = ""             # data:image/png;base64,... target reformat (mapped plane)
+state.oblique_tgt_origin = [0.0, 0.0, 0.0]
+state.oblique_tgt_normal = [0.0, 0.0, 1.0]
+state.oblique_cmp_reliable = True      # inlier_fraction >= 0.30 (same gate as Compare/API)
+state.oblique_cmp_rms = 0.0
+state.oblique_cmp_inlier_fraction = 0.0
+state.oblique_cmp_reg_note = ""
+state.oblique_cmp_msg = ""             # status / error line
+state.oblique_cmp_busy = False
 
 # --- Phase IV: linked compare cross-sections ------------------------------ #
 # A second, independent MPR-style pair (Reference volume / Target volume) shown
@@ -599,16 +619,46 @@ ctrl.mpr_reset = _mpr_reset_for_side
 # matched at every point by construction: the returned meta's basis (u, v)
 # fully defines pixel<->world for that exact plane.
 #
-# Display-only: this NEVER calls core.pipeline / schedules a recompute. The
-# widget survives plotter.clear()/clear_actors() (pyvista keeps widgets across
-# scene rebuilds), so it stays put across Apply/Recompute and display-only
-# recolors; only a side switch or a fresh session re-seeds it.
+# BILATERAL: when the session has two distinct volume sides, the widget lives
+# on the REFERENCE side and the SAME physical cut is mapped through the cached
+# compare_registration 4x4 (core.pipeline.map_plane) onto the TARGET side —
+# so BOTH bones' 2D reformats render as two boxes ("Reference bone" /
+# "Target bone") above the plane controls, matching the API's
+# /oblique-compare contract exactly (registers once, reused while the plane
+# moves). Single-sided/mesh sessions fall back to the single-panel oblique.
+#
+# Display-only: this NEVER calls core.pipeline's thickness/deviation compute.
+# The one-time registration (compare_registration) is cached, same as Compare
+# mode; only the (fast) re-sample runs on every plane move. The widget
+# survives plotter.clear()/clear_actors() (pyvista keeps widgets across scene
+# rebuilds), so it stays put across Apply/Recompute and display-only recolors;
+# only a side switch or a fresh session re-seeds it.
 # --------------------------------------------------------------------------- #
 OBLIQUE_WIDGET: dict = {"widget": None}
+_OBLIQUE_MIN_RELIABLE_INLIER = 0.30
+
+
+def _oblique_bilateral_sides() -> tuple[str, str] | None:
+    """Pick the (reference, target) volume-side pair for the oblique-compare
+    view, or None when the session isn't bilateral (mirrors
+    ``_compare_sides_available``, kept independent so the oblique widget can
+    stay on Mode A's reference/target choice regardless of Mode B state)."""
+    with _LOCK:
+        if SESSION.get("is_mesh"):
+            return None
+        sides = {k: v for k, v in SESSION["sides"].items() if v.get("arr") is not None}
+    names = list(sides.keys())
+    if len(names) < 2:
+        return None
+    ref = state.ref_side if state.ref_side in sides else names[0]
+    tgt = state.tgt_side if (state.tgt_side in sides and state.tgt_side != ref) else (
+        next((n for n in names if n != ref), names[0]))
+    return ref, tgt
 
 
 def _oblique_render(side: dict, origin, normal) -> None:
-    """Render the oblique reformat for (origin, normal) and push it to state."""
+    """Render the SINGLE-panel oblique reformat for (origin, normal) and push
+    it to state. Used for non-bilateral (single-sided / mesh) sessions."""
     png, meta = mpr.render_oblique_png(
         side["arr"], side["spacing"], side["offset_xyz"], origin, normal,
         size_mm=float(state.oblique_size_mm), px_mm=1.0, max_dim=384,
@@ -623,37 +673,116 @@ def _oblique_render(side: dict, origin, normal) -> None:
     state.flush()
 
 
+def _oblique_render_compare(ref_side: str, tgt_side: str, origin, normal) -> None:
+    """Render BOTH bones' 2D reformats for the bilateral oblique-compare view.
+
+    Registers reference<->target ONCE (cached via ``_get_compare_registration``
+    — the SAME cache Compare mode uses, keyed on (ref,tgt,params,manual)), then
+    maps the reference (origin, normal) onto the target via
+    ``core.pipeline.map_plane`` and renders both reformats with
+    ``core.viz.slice.render_oblique_png``. Surfaces the reliable/amber gate
+    (inlier_fraction >= 0.30) — the target box is rendered regardless, never
+    hidden, only flagged.
+    """
+    with _LOCK:
+        ref = SESSION["sides"][ref_side]
+        tgt = SESSION["sides"][tgt_side]
+    reg = _get_compare_registration(ref_side, tgt_side)
+    tgt_origin, tgt_normal = pipeline.map_plane(
+        reg["ref_world_to_tgt_world"], origin, normal)
+
+    size_mm, px_mm = float(state.oblique_size_mm), 1.0
+    window, level = float(state.oblique_window), float(state.oblique_level)
+    ref_png, ref_meta = mpr.render_oblique_png(
+        ref["arr"], ref["spacing"], ref["offset_xyz"], origin, normal,
+        size_mm=size_mm, px_mm=px_mm, max_dim=384, window=window, level=level)
+    tgt_png, tgt_meta = mpr.render_oblique_png(
+        tgt["arr"], tgt["spacing"], tgt["offset_xyz"], tgt_origin, tgt_normal,
+        size_mm=size_mm, px_mm=px_mm, max_dim=384, window=window, level=level)
+
+    reliable = reg["inlier_fraction"] >= _OBLIQUE_MIN_RELIABLE_INLIER
+    note = ("registration is well-constrained" if reliable else
+            "low overlap — the matched target reformat is unreliable "
+            "(isolate the bone / adjust registration first)")
+
+    import base64
+    with state:
+        state.oblique_available = True
+        state.oblique_bilateral = True
+        state.oblique_ref_side = ref_side
+        state.oblique_tgt_side = tgt_side
+        state.oblique_origin = [float(x) for x in ref_meta["origin_xyz_mm"]]
+        state.oblique_normal = [float(x) for x in ref_meta["normal"]]
+        state.oblique_tgt_origin = [float(x) for x in tgt_meta["origin_xyz_mm"]]
+        state.oblique_tgt_normal = [float(x) for x in tgt_meta["normal"]]
+        state.oblique_ref_img = "data:image/png;base64," + base64.b64encode(ref_png).decode("ascii")
+        state.oblique_tgt_img = "data:image/png;base64," + base64.b64encode(tgt_png).decode("ascii")
+        state.oblique_cmp_rms = round(float(reg["rms"]), 3)
+        state.oblique_cmp_inlier_fraction = round(float(reg["inlier_fraction"]), 3)
+        state.oblique_cmp_reliable = bool(reliable)
+        state.oblique_cmp_reg_note = note
+    state.flush()
+
+
 def _on_oblique_widget(normal, origin) -> None:
     """pyvista plane-widget callback: (normal, origin) on every drag/create.
 
-    Display-only — re-renders the 2D reformat ONLY; never touches
-    core.pipeline / the recompute pipeline.
+    Display-only — re-renders the 2D reformat(s) ONLY; never touches
+    core.pipeline's thickness/deviation recompute. Bilateral sessions render
+    BOTH boxes (registering once, then re-sampling on every move); otherwise
+    falls back to the single-panel oblique.
     """
+    origin = tuple(float(x) for x in origin)
+    normal = tuple(float(x) for x in normal)
+    picked = _oblique_bilateral_sides()
+    if picked is not None:
+        try:
+            _oblique_render_compare(picked[0], picked[1], origin, normal)
+            return
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            with state:
+                state.oblique_cmp_msg = "Oblique compare render failed; showing reference only."
+            state.flush()
     side = _mpr_active_side()
     if side is None:
         return
     try:
-        _oblique_render(side, tuple(float(x) for x in origin), tuple(float(x) for x in normal))
+        with state:
+            state.oblique_bilateral = False
+        _oblique_render(side, origin, normal)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
 
 def _oblique_reset_for_side(*_a, **_k) -> None:
     """(Re)seed the plane widget at the active volume side's centre with a
-    non-axis-aligned tilt, and render the initial reformat.
+    non-axis-aligned tilt, and render the initial reformat(s).
 
-    Called on startup and whenever the active volume side changes (mirrors
-    ``_mpr_reset_for_side``). A bare-mesh session or an unavailable volume
-    disables the panel instead of touching the widget.
+    Called on startup and whenever the active volume side / ref-tgt pair
+    changes (mirrors ``_mpr_reset_for_side`` / ``_compare_reset``). A
+    bare-mesh session or an unavailable volume disables the panel instead of
+    touching the widget. Bilateral sessions seed the widget on the REFERENCE
+    side (Mode A's side selector doubles as which bone hosts the plane) so
+    the SAME plane maps onto the target via the cached registration.
     """
-    side = _mpr_active_side()
-    if side is None:
+    picked = _oblique_bilateral_sides()
+    with _LOCK:
+        sides = dict(SESSION["sides"])
+    if picked is not None:
+        host_key = picked[0]
+        side = sides.get(host_key)
+    else:
+        side = _mpr_active_side()
+        host_key = state.mpr_side
+    if side is None or side.get("arr") is None:
         with state:
             state.oblique_available = False
+            state.oblique_bilateral = False
         state.flush()
         return
     info = mpr.volume_info(side["arr"], side["spacing"], side["offset_xyz"],
-                           side.get("side", state.mpr_side))
+                           side.get("side", host_key))
     ext = info["extent_mm"]
     bounds = (ext["x"][0], ext["x"][1], ext["y"][0], ext["y"][1],
              ext["z"][0], ext["z"][1])
@@ -665,16 +794,25 @@ def _oblique_reset_for_side(*_a, **_k) -> None:
     normal = np.array([0.35, 0.5, 0.79], dtype=np.float64)
     normal = normal / np.linalg.norm(normal)
     with state:
-        state.oblique_side = side.get("side", state.mpr_side)
+        state.oblique_side = side.get("side", host_key)
         state.oblique_window = info["default_window"]
         state.oblique_level = info["default_level"]
+        state.oblique_bilateral = picked is not None
+        state.oblique_cmp_msg = ""
     state.flush()
 
     w = OBLIQUE_WIDGET.get("widget")
     if w is None:
+        # test_callback=False: we explicitly render the initial reformat(s)
+        # below (on a background thread for the bilateral/heavy-registration
+        # case) — letting pyvista ALSO fire the callback synchronously on
+        # creation (its default) would run the registration twice on first
+        # load for no benefit (same cache key -> same final entry, just
+        # doubled first-load latency).
         w = PLOTTER.add_plane_widget(
             _on_oblique_widget, normal=tuple(normal), origin=center,
             bounds=bounds, implicit=True, outline_translation=False,
+            test_callback=False,
         )
         OBLIQUE_WIDGET["widget"] = w
     else:
@@ -684,9 +822,35 @@ def _oblique_reset_for_side(*_a, **_k) -> None:
             w.SetNormal(*normal)
         except Exception:  # noqa: BLE001
             traceback.print_exc()
-    # Render the initial reformat directly (some pyvista/VTK versions do not
-    # re-invoke the callback on a programmatic SetOrigin/SetNormal).
-    _oblique_render(side, center, tuple(normal))
+
+    # Render the initial reformat(s) directly (some pyvista/VTK versions do
+    # not re-invoke the callback on a programmatic SetOrigin/SetNormal). A
+    # bilateral registration can be SLOW on its first run (heavy ICP); run it
+    # on a background thread so the UI stays responsive, exactly like
+    # ``_compare_reset``. Non-bilateral rendering is fast and stays inline.
+    if picked is not None:
+        ref_side, tgt_side = picked
+
+        def _job():
+            with state:
+                state.oblique_cmp_busy = True
+                state.oblique_cmp_msg = "Registering reference <-> target… (cached after first run)"
+            state.flush()
+            try:
+                _oblique_render_compare(ref_side, tgt_side, center, tuple(normal))
+                with state:
+                    state.oblique_cmp_busy = False
+                    state.oblique_cmp_msg = ""
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                with state:
+                    state.oblique_cmp_busy = False
+                    state.oblique_cmp_msg = f"Oblique compare registration failed: {e}"
+                state.flush()
+
+        threading.Thread(target=_job, daemon=True).start()
+    else:
+        _oblique_render(side, center, tuple(normal))
 
 
 ctrl.oblique_reset = _oblique_reset_for_side
@@ -1361,18 +1525,42 @@ state.change("side")(_mpr_reset_for_side)
 
 
 def _oblique_refresh_window_level(*_a, **_k) -> None:
-    """Window/level/size changed: re-render the reformat at the CURRENT widget
-    (origin, normal) without touching the plane or the pipeline."""
-    side = _mpr_active_side()
-    if side is None or not state.oblique_available:
+    """Window/level/size changed: re-render the reformat(s) at the CURRENT
+    widget (origin, normal) without touching the plane or the pipeline."""
+    if not state.oblique_available:
         return
-    _oblique_render(side, tuple(state.oblique_origin), tuple(state.oblique_normal))
+    origin, normal = tuple(state.oblique_origin), tuple(state.oblique_normal)
+    if state.oblique_bilateral:
+        picked = _oblique_bilateral_sides()
+        if picked is None:
+            return
+        try:
+            _oblique_render_compare(picked[0], picked[1], origin, normal)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        return
+    side = _mpr_active_side()
+    if side is None:
+        return
+    _oblique_render(side, origin, normal)
 
 
 for _k in ("oblique_window", "oblique_level", "oblique_size_mm"):
     state.change(_k)(_oblique_refresh_window_level)
 # Switching the thickness side also re-seeds the oblique plane widget.
 state.change("side")(_oblique_reset_for_side)
+
+
+def _oblique_on_ref_tgt_change(*_a, **_k) -> None:
+    """A ref/tgt swap changes which bones the oblique-compare boxes show —
+    re-seed the widget on the (possibly new) reference side, exactly like a
+    side switch. Only matters when oblique mode is showing (or can show) the
+    bilateral pair; harmless no-op otherwise."""
+    _oblique_reset_for_side()
+
+
+for _k in ("ref_side", "tgt_side"):
+    state.change(_k)(_oblique_on_ref_tgt_change)
 
 
 # --------------------------------------------------------------------------- #
@@ -2021,13 +2209,16 @@ with SinglePageWithDrawerLayout(server) as layout:
 
                 # ---- Oblique column (right): arbitrary-tilt reformat ------- #
                 # Driven by the pyvista plane widget on the 3D view (drag it to
-                # tilt the plane to ANY orientation). The reformat below is
-                # sampled directly on that (origin, normal) via
-                # core.viz.slice.render_oblique_png — matched to the 3D cut at
-                # every pixel by construction. Display-only: no recompute.
+                # tilt the plane to ANY orientation). BILATERAL sessions show
+                # TWO boxes ("Reference bone" / "Target bone") ABOVE the plane
+                # controls: the SAME plane, mapped onto the target bone via the
+                # cached registration (core.pipeline.map_plane), so both boxes
+                # show the same physical cut on both bones. Single-sided/mesh
+                # sessions fall back to the single panel below the controls.
+                # Display-only: no thickness/deviation recompute.
                 with html.Div(
                     v_show="oblique_active",
-                    style="flex:0 0 360px;height:100%;overflow-y:auto;"
+                    style="flex:0 0 380px;height:100%;overflow-y:auto;"
                           "border-left:1px solid #e0e0e0;background:#0f1116;"
                           "padding:10px 12px;box-sizing:border-box"):
                     html.Div(
@@ -2053,6 +2244,55 @@ with SinglePageWithDrawerLayout(server) as layout:
                         "{{ oblique_normal[2].toFixed(2) }})",
                         style="color:#7d838c;font-size:10px;margin-bottom:8px")
 
+                    # ---- BILATERAL: two boxes ABOVE the plane controls. -----
+                    with html.Div(v_if="oblique_bilateral", classes="mb-2"):
+                        html.Div("{{ oblique_cmp_msg }}", v_if="oblique_cmp_msg",
+                                 style="color:#9aa0aa;font-size:11px;margin-bottom:6px")
+                        # Reliability banner — same gate as Compare/API
+                        # (inlier_fraction >= 0.30); the target box is never
+                        # hidden when unreliable, only flagged.
+                        with html.Div(
+                            v_if="oblique_cmp_reliable",
+                            style="border-radius:6px;padding:5px 8px;margin-bottom:8px;"
+                                  "font-size:10px;line-height:1.4;background:#123219;"
+                                  "border:1px solid #1e5c2e;color:#8fe3a3"):
+                            html.Div("Registration reliable", style="font-weight:700")
+                            html.Div(
+                                "RMS {{ oblique_cmp_rms }} mm · inlier fraction "
+                                "{{ oblique_cmp_inlier_fraction }}")
+                        with html.Div(
+                            v_if="!oblique_cmp_reliable",
+                            style="border-radius:6px;padding:5px 8px;margin-bottom:8px;"
+                                  "font-size:10px;line-height:1.4;background:#332405;"
+                                  "border:1px solid #7a5a10;color:#f0c96b"):
+                            html.Div("Registration UNRELIABLE — target reformat not trustworthy",
+                                     style="font-weight:700")
+                            html.Div(
+                                "RMS {{ oblique_cmp_rms }} mm · inlier fraction "
+                                "{{ oblique_cmp_inlier_fraction }} (< 0.30)")
+                        with html.Div(style="display:flex;flex-direction:row;gap:8px"):
+                            with html.Div(style="flex:1 1 0;min-width:0"):
+                                html.Div(
+                                    "Reference bone ({{ oblique_ref_side }})",
+                                    style="color:#cfd3da;font-size:12px;font-weight:700;"
+                                          "margin-bottom:3px")
+                                html.Img(
+                                    src=("oblique_ref_img",), v_if="oblique_ref_img",
+                                    style="width:100%;height:auto;display:block;"
+                                          "background:#000;border:1px solid #2a2e36;"
+                                          "border-radius:5px;image-rendering:pixelated")
+                            with html.Div(style="flex:1 1 0;min-width:0"):
+                                html.Div(
+                                    "Target bone ({{ oblique_tgt_side }})",
+                                    style="color:#cfd3da;font-size:12px;font-weight:700;"
+                                          "margin-bottom:3px")
+                                html.Img(
+                                    src=("oblique_tgt_img",), v_if="oblique_tgt_img",
+                                    style="width:100%;height:auto;display:block;"
+                                          "background:#000;border:1px solid #2a2e36;"
+                                          "border-radius:5px;image-rendering:pixelated;"
+                                          "opacity:{{ oblique_cmp_reliable ? 1 : 0.55 }}")
+
                     with html.Div(style="margin-bottom:8px"):
                         v3.VSlider(
                             v_model=("oblique_window",), label="Window (HU)",
@@ -2070,14 +2310,15 @@ with SinglePageWithDrawerLayout(server) as layout:
                             density="compact", hide_details=True, color="cyan",
                             style="color:#cfd3da")
 
+                    # ---- Single-panel fallback (non-bilateral sessions). ----
                     html.Img(
-                        src=("oblique_img",), v_if="oblique_img",
+                        src=("oblique_img",), v_if="!oblique_bilateral && oblique_img",
                         style="width:100%;height:auto;display:block;"
                               "background:#000;border:1px solid #2a2e36;"
                               "border-radius:5px;image-rendering:pixelated")
                     html.Div(
                         "No reformat yet — drag the 3D plane widget.",
-                        v_if="!oblique_img",
+                        v_if="!oblique_bilateral && !oblique_img",
                         style="color:#888;font-size:11px;margin-top:8px")
 
                 # ---- Compare column (right): Phase IV linked cross-sections - #

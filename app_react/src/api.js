@@ -266,6 +266,51 @@ export function obliquePixelToWorld(meta, row, col) {
   ];
 }
 
+// POST /api/session/{sid}/oblique-compare
+//   body: { reference_side, target_side, origin_xyz_mm:[x,y,z], normal:[nx,ny,nz],
+//           up?, size_mm?, px_mm?, max_dim?, window?, level?, params?, manual_transform? }
+//   -> { reference:{ image_png_base64, meta }, target:{ image_png_base64, meta },
+//        registration:{ rms_mm, inlier_fraction, reliable, note } }
+// Two-bone matched oblique (Phase VII compare): ONE reference oblique plane is
+// mapped through the cached rigid registration onto the target bone, so BOTH
+// boxes show the SAME physical cut. The FIRST call for a (sides,params) pair
+// runs the heavy registration (can take ~1-2 min); it is then cached, so moving
+// the plane afterwards only re-samples (fast). reliable=false MUST be surfaced
+// (amber banner) — never hidden.
+export function obliqueCompare(
+  sessionId,
+  {
+    referenceSide,
+    targetSide,
+    originXyz,
+    normal,
+    up,
+    sizeMm,
+    pxMm,
+    window,
+    level,
+    maxDim,
+    params,
+    manualTransform,
+  },
+) {
+  const body = {
+    reference_side: referenceSide,
+    target_side: targetSide,
+    origin_xyz_mm: originXyz,
+    normal,
+  };
+  if (up) body.up = up;
+  if (sizeMm != null) body.size_mm = sizeMm;
+  if (pxMm != null) body.px_mm = pxMm;
+  if (window != null) body.window = window;
+  if (level != null) body.level = level;
+  if (maxDim != null) body.max_dim = maxDim;
+  if (params !== undefined) body.params = params;
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/oblique-compare`, body);
+}
+
 // GET /api/session/{sid}/model.glb -> binary glTF URL of the most-recently-
 // computed surface (thickness or deviation), per-vertex colour baked in. 409
 // if nothing has been computed yet. Returned as a plain URL string (like

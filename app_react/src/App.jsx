@@ -968,6 +968,11 @@ export default function App() {
                   pickedWorld={marker}
                   onPlaneChange={setObliquePlane}
                   onPixelPick={onObliquePixelPick}
+                  compareMode={canCompareSides}
+                  referenceSide={referenceSide}
+                  targetSide={targetSide}
+                  params={values}
+                  manualTransform={manualTransform}
                 />
               ) : (
                 <div className="mpr-wrap mpr-empty">

@@ -66,6 +66,13 @@ matched at every point — click the reformat and the 3D marker lands exactly th
 - **Oblique / any cross-section** — tilt a cutting plane to *any* orientation and
   the 2D reformat is matched to the 3D cut **at every point** (click the reformat,
   the 3D marker lands exactly there).
+- **Two-bone cross-section** — one movable plane, both bones' 2D CT shown as two
+  boxes above the plane controls (the reference plane is mapped onto the other bone
+  through the registration, so it's the *same* physical cut):
+
+  ![Two-bone oblique cross-section — Reference bone and Target bone reformats as
+  two boxes above the movable cutting-plane controls](docs/assets/ui_react_oblique_compare.png)
+
 - **Compare** two registered sides' matched cross-sections side by side — and the
   linkage is **gated on registration quality**: a low-overlap alignment (e.g. a
   thorax-fused bone) is flagged unreliable, never silently trusted.
