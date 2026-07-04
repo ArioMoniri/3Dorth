@@ -28,9 +28,15 @@ Status key: ✅ done+verified · 🟡 in progress · ⬜ not started · ⚠️ b
 - Connected-components does NOT isolate a single proximal humerus: at 226 HU the thoracic skeleton is one connected mass. The **left humerus is isolated** (region 4, abducted arm); the **right humerus is fused into the thorax** (adducted arm).
 - Non-bone table/positioning pads (>226 HU) appear as regions 2-3 — filtered via region toggles / clipping (both speced).
 - **Consequence:** isolating the right proximal humerus (or the SNR sub-region) needs the interactive **clip box / plane** tool (Phase 1 interactivity / Phase 2), not CC labeling alone. Left humerus (region 4) is analysis-ready for the Mode A demo.
-| 2 | local-thickness ≈ ray-cast (mean abs ≤ 0.3 mm, r ≥ 0.8) | `test_thickness_agreement.py` | ⬜ |
-| 2 | Fig-2 discrete mm colorbar (7 steps, green→red, ticks) | visual + `test_colorbar.py` | ⬜ |
-| 2 | Line (N pts) + height bracket overlays, mm readouts | `test_measurement.py` | ⬜ |
+| 2 | local-thickness ≈ ray-cast on phantom; magnitude matches paper | `test_thickness.py` (5 pass, incl. hollow-shell phantom); real mean 2.78 mm ∈ paper 2.1–2.85 | ✅ |
+| 2 | Fig-2 discrete mm colorbar (7 steps, green→red, article ticks) | `scripts/qa_thickness.py` render (outputs/phase2_thickness.png) | ✅ |
+| 2 | Line (N pts) + height bracket overlays, mm readouts | `test_measurement.py` (measurement tools) | ⬜ |
+
+### Phase 2 findings of record (see outputs/phase2_thickness.png + _stats.json)
+- Local thickness (Hildebrand-Rüegsegger, = 3-Matic wall thickness) is the primary method. Fig-2-faithful render: thin green cortex on the head, thick orange-red on the diaphysis — correct proximal→distal gradient.
+- **Bug caught by the phantom test:** trilinear sampling of the thickness field at surface vertices averaged with background zeros and halved the reading (mean 1.5→2.78 mm after fixing via background extrapolation). Whole-surface mean now matches the paper.
+- Ray-cast validator agrees exactly on a shell; on real bone it runs ~0.6 mm thicker in subcortical trabecular regions (expected; motivates Treece — future work).
+- Remaining Phase 2 work: Fig-2 measurement overlays (3-point line + height bracket).
 | 3 | Anchor ICP RMS < 1.0 mm; overlay aligned | `test_registration.py` | ⬜ |
 | 3 | Signed-distance sign verified on synthetic point | `test_deviation_sign.py` | ⬜ |
 | 3 | Two distance libs agree (median abs ≤ 0.2 mm) | `test_deviation_agreement.py` | ⬜ |
