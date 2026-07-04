@@ -132,6 +132,7 @@ export default function Viewport({ manifest, mode, coloring, regionState }) {
     coloring.rangeMax,
     coloring.steps,
     coloring.reverse,
+    coloring.colormap,
     regionState.visible.join(','),
     regionState.highlight,
   ]);
@@ -168,6 +169,7 @@ async function renderThickness(ctx, isCancelled, manifest, coloring, geometryCac
     rangeMax: coloring.rangeMax,
     steps: coloring.steps,
     reverse: coloring.reverse,
+    colormap: coloring.colormap,
   });
   ctx.lut = lut;
 

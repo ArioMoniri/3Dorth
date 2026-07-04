@@ -23,11 +23,11 @@ parameters:
   mode_b_colormap: blue_white_red
   mode_b_center: 0.0
   mode_b_range_abs: 5.0
+  mode_b_colorbar_steps: 11
   mesh_smooth_iters: 20
   mesh_decimate_fraction: 0.0
   standardized_view: anterior
 meta:
   project: "3Dorth \u2014 3D bone cortical mapping & comparison"
-  reference: Guo et al. 2022, Eur J Med Res 27:102, doi:10.1186/s40001-022-00724-w
-  reproduced_software: Mimics 21.0 + 3-Matic 12.0 (this tool reproduces open-source)
-  note: Research tooling, not a clinical diagnostic. All outputs de-identified.
+  reference: Guo et al. 2022, Eur J Med Res 27:102
+  note: Research tooling, not a clinical diagnostic. De-identified.

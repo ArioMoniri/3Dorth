@@ -10,8 +10,8 @@
 
 import { legendBands, legendBoundaries, fmt4 } from './colors';
 
-export default function Legend({ rangeMin, rangeMax, steps, reverse, title }) {
-  const bands = legendBands({ rangeMin, rangeMax, steps, reverse });
+export default function Legend({ rangeMin, rangeMax, steps, reverse, colormap, title }) {
+  const bands = legendBands({ rangeMin, rangeMax, steps, reverse, colormap });
   const boundaries = legendBoundaries({ rangeMin, rangeMax, steps });
 
   // Draw high value at the top: reverse both the swatch stack and the tick list.

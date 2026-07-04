@@ -205,6 +205,11 @@ REGISTRY: list[ParamSpec] = [
         control=ControlType.FLOAT, default=5.0, unit="mm", minimum=0.1, maximum=30.0, step=0.1, mode=Mode.B,
         help="Symmetric limit; colorbar spans [center-range, center+range].",
     ),
+    ParamSpec(
+        key="mode_b_colorbar_steps", label="Colorbar steps (Mode B)", group="Coloring",
+        control=ControlType.INT, default=11, minimum=3, maximum=21, step=2, mode=Mode.B,
+        help="Number of discrete diverging bands for the deviation colorbar.",
+    ),
 
     # ---- Meshing ------------------------------------------------------------
     ParamSpec(

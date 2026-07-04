@@ -142,6 +142,7 @@ export default function App() {
                 rangeMax={coloring.rangeMax}
                 steps={coloring.steps}
                 reverse={coloring.reverse}
+                colormap={coloring.colormap}
                 title="Cortical thickness (mm)"
               />
             </div>

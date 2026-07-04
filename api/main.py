@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from api.routers import demo, parameters  # noqa: E402
+from api.routers import demo, parameters, session  # noqa: E402
 
 app = FastAPI(title="3Dorth API", version="0.0.1")
 app.add_middleware(
@@ -27,10 +27,15 @@ app.add_middleware(
 )
 app.include_router(parameters.router)
 app.include_router(demo.router)
+app.include_router(session.router)
 
 _DEMO_DIR = ROOT / "outputs" / "demo"
 if _DEMO_DIR.exists():
     app.mount("/api/geometry", StaticFiles(directory=str(_DEMO_DIR)), name="geometry")
+
+_SESSION_DIR = ROOT / "outputs" / "sessions"
+_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/session-geometry", StaticFiles(directory=str(_SESSION_DIR)), name="session-geometry")
 
 
 @app.get("/api/health")
