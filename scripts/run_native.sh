@@ -90,8 +90,12 @@ if [ ! -x "$UV" ]; then
 fi
 if [ -x "$UV" ]; then
   UVBIN="$UV"
-  step "Python 3.12 venv via uv…"
-  retry 2 "$UVBIN" venv --python 3.12 .venv >/dev/null 2>&1 || { err "uv venv failed"; note_issue "uv venv --python 3.12 failed"; }
+  if [ -x .venv/bin/python ]; then
+    step "Python venv (.venv) — reusing the existing one"
+  else
+    step "Python 3.12 venv via uv…"
+    retry 2 "$UVBIN" venv --python 3.12 .venv >/dev/null 2>&1 || { err "uv venv failed"; note_issue "uv venv --python 3.12 failed"; }
+  fi
   step "Python dependencies (open3d/VTK/… via uv — a few minutes first run)…"
   if retry 2 "$UVBIN" pip install --python .venv/bin/python -r requirements.txt; then ok "python deps installed (Python 3.12)"
   else err "dependency install failed"; note_issue "uv pip install failed (arch must be x86-64 for open3d wheels)"; fi
