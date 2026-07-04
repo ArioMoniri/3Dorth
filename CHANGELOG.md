@@ -23,6 +23,24 @@ All notable changes to this project are documented here. The format follows
   crisp discrete colorbar.
 - Deployment: Dockerfiles, `docker-compose` profiles, one-line `./deploy.sh`,
   `run.sh`, `Makefile`, pinned `requirements.txt`.
+- Real-time UI: every parameter applies automatically — display-only knobs
+  re-colour instantly, compute knobs auto-recompute (debounced, superseding), no
+  Apply click (`recompute` flag in the registry drives both UIs).
+- Region thumbnails: a small render per bone region in the selector
+  (click-to-select); region selection now ranks by *boneness* so a table pad is
+  never picked over bone.
+- Inputs: DICOM `.zip`, NIfTI (`.nii/.nii.gz`), and surface meshes
+  (`.stl/.ply/.obj/.vtp`); single-sided/general-bone detection.
+- A shipped **de-identified** NIfTI demo (no patient tags) is the default for all
+  users, including on the server.
+- Multi-format export (PNG/TIFF+DPI, STL/PLY/OBJ/VTP, DICOM) with a camera pose;
+  hover tooltip; Mode-B manual anchor + reference/target swap.
+- UI switcher + Share panel with a resilient Cloudflare tunnel (`scripts/share.sh`
+  survives sleep/wake; the panel polls `/api/config` for the live URL).
+- Bounded RAM/compute (`core/resources`): int16 volumes, adaptive resolution,
+  serialized computes, LRU session eviction, optional GPU (CuPy) — env-tunable.
+- Designed (not yet shipped): in-panel MPR image viewer, matched-cross-section
+  compare (gated on registration quality), and AR (GLB / WebXR).
 
 ### Changed
 - Colormap selection now applies live in the React viewport and legend
