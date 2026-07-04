@@ -174,14 +174,36 @@ def split_sides(arr: np.ndarray, spacing: tuple, margin_mm: float = 12.0,
     }
 
 
-def _pick_limb_region(seg, shape, spacing):
-    """Best default region for a limb bone: sizable but laterally compact."""
+def _boneness_map(arr: np.ndarray, labels: np.ndarray, n_labels: int) -> np.ndarray:
+    """Per-label fraction of DENSE cortical voxels (HU >= 500).
+
+    Real bone has a dense cortex; CT-table foam / positioning pads that clear the
+    226 HU floor do not. This cleanly separates bone regions from non-bone ones
+    (the reason the right side previously showed a table pad instead of a bone).
+    """
+    dense = arr >= 500.0
+    counts = np.bincount(labels.ravel(), minlength=n_labels + 1).astype(np.float64)
+    dcounts = np.bincount(labels.ravel(), weights=dense.ravel().astype(np.float64),
+                          minlength=n_labels + 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(counts > 0, dcounts / counts, 0.0)
+
+
+def _bone_regions(seg, boneness: np.ndarray, min_boneness: float = 0.05):
+    """Regions that are actually bone (enough dense cortex), largest first."""
+    return [r for r in seg.regions if boneness[r.label] >= min_boneness]
+
+
+def _pick_bone_region(seg, arr, spacing, boneness):
+    """Default region: a compact dense bone (isolated limb) if present, else the
+    largest bone region — but never a non-bone (table/pad) region."""
+    bones = _bone_regions(seg, boneness) or list(seg.regions)
     sx = spacing[0]
-    fov_x = shape[2] * sx
-    cands = [r for r in seg.regions
-             if 15.0 <= r.volume_mm3 / 1000 <= 400.0
-             and (r.bbox_zyx[5] - r.bbox_zyx[4]) * sx < 0.7 * fov_x]
-    return max(cands, key=lambda r: r.volume_mm3) if cands else seg.largest_region()
+    fov_x = arr.shape[2] * sx
+    compact = [r for r in bones
+               if 15.0 <= r.volume_mm3 / 1000 <= 400.0
+               and (r.bbox_zyx[5] - r.bbox_zyx[4]) * sx < 0.7 * fov_x]
+    return max(compact or bones, key=lambda r: r.volume_mm3)
 
 
 def _stats(v: np.ndarray) -> dict:
@@ -199,9 +221,10 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     seg = segment_bone(arr, spacing, params)
     if seg.n_regions == 0:
         raise ValueError("no bone segmented at these thresholds")
+    boneness = _boneness_map(arr, seg.labels, int(seg.labels.max()))
     region = next((r for r in seg.regions if r.label == region_label), None)
     if region is None:
-        region = _pick_limb_region(seg, arr.shape, spacing)
+        region = _pick_bone_region(seg, arr, spacing, boneness)
 
     z0, z1, y0, y1, x0, x1 = region.bbox_zyx
     pad = 2
@@ -228,12 +251,14 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     mesh.translate([xx0 * sx + offset_xyz[0], yy0 * sy + offset_xyz[1], zz0 * sz + offset_xyz[2]],
                    inplace=True)
 
+    bone_list = _bone_regions(seg, boneness) or list(seg.regions[:12])
     return {
         "mesh": mesh,
         "region_label": region.label,
         "stats": _stats(th),
-        "regions": [{"label": r.label, "volume_cm3": round(r.volume_mm3 / 1000, 1)}
-                    for r in seg.regions[:12]],
+        "regions": [{"label": r.label, "volume_cm3": round(r.volume_mm3 / 1000, 1),
+                     "boneness": round(float(boneness[r.label]), 3)}
+                    for r in bone_list[:12]],
         "metal_fraction": round(seg.metal_fraction, 6),
     }
 
