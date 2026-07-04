@@ -23,6 +23,7 @@ x-threedorth-env: &threedorth-env
 
 services:
   api:
+    image: 3dorth-api:latest
     build:
       context: .
       dockerfile: deploy/Dockerfile.backend
@@ -39,6 +40,7 @@ services:
     restart: unless-stopped
 
   trame:
+    image: 3dorth-trame:latest
     build:
       context: .
       dockerfile: deploy/Dockerfile.backend
@@ -51,6 +53,7 @@ services:
     restart: unless-stopped
 
   react:
+    image: 3dorth-react:latest
     build:
       context: .
       dockerfile: deploy/Dockerfile.react

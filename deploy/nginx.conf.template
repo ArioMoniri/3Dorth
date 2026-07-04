@@ -1,5 +1,12 @@
+# nginx config TEMPLATE. The official nginx image runs envsubst on this at
+# container start (/etc/nginx/templates/*.template -> /etc/nginx/conf.d/), so
+# ${NGINX_PORT} and ${API_UPSTREAM} come from the environment while nginx's own
+# $uri / $host / $http_upgrade are left untouched (they are not env vars).
+#
+#   bridge networking (default compose): API_UPSTREAM=api:8000,       NGINX_PORT=80
+#   host networking  (restricted deploy): API_UPSTREAM=127.0.0.1:8000, NGINX_PORT=8088
 server {
-    listen 80;
+    listen ${NGINX_PORT};
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
@@ -14,7 +21,7 @@ server {
 
     # Reverse-proxy the API (WebSocket-ready, long timeouts for compute).
     location /api/ {
-        proxy_pass http://api:8000;
+        proxy_pass http://${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";

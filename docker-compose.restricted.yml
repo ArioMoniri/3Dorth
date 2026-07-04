@@ -1,0 +1,60 @@
+# 3Dorth — RESTRICTED deploy (non-privileged Rancher/RKE2/containerd, no systemd,
+# no Docker bridge, images built ELSEWHERE and loaded via `docker load`).
+#
+# Standalone file (do NOT merge with docker-compose.yml — it uses host networking
+# and pre-built images):
+#   docker compose -f docker-compose.restricted.yml --profile all up -d --no-build
+# or just: ./scripts/deploy_restricted.sh
+#
+# Host networking (no bridge is available): each service binds a HOST port directly
+#   api   -> :8000     react -> :8088 (nginx, proxies /api -> 127.0.0.1:8000)
+#   trame -> :8081
+# Then tunnel with: ./scripts/share.sh 8088 8081
+#
+# Compute env is set by scripts/dynamic_resources.sh (RAM/MIG-aware); the defaults
+# below are conservative fallbacks if you run this file directly.
+x-env: &env
+  THREEDORTH_MAX_SESSIONS: ${THREEDORTH_MAX_SESSIONS:-6}
+  THREEDORTH_COMPUTE_CONCURRENCY: ${THREEDORTH_COMPUTE_CONCURRENCY:-2}
+  THREEDORTH_MAX_WORK_VOXELS: ${THREEDORTH_MAX_WORK_VOXELS:-35000000}
+  THREEDORTH_MAX_ISO_VOXELS: ${THREEDORTH_MAX_ISO_VOXELS:-14000000}
+  THREEDORTH_GPU: ${THREEDORTH_GPU:-0}
+
+services:
+  api:
+    image: 3dorth-api:latest
+    container_name: 3dorth-api
+    pull_policy: never                 # never reach a registry; use the loaded image
+    network_mode: host                 # no bridge available in this container
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    environment: *env
+    volumes:
+      - ./outputs:/app/outputs         # share.sh writes public_urls.json here; /api/config reads it
+      - ./data:/app/data
+    restart: unless-stopped
+
+  trame:
+    image: 3dorth-trame:latest
+    container_name: 3dorth-trame
+    pull_policy: never
+    network_mode: host
+    # bind :8081 on the host (matches ./scripts/share.sh 8088 8081)
+    command: xvfb-run -a python -m app_trame.app --server --host 0.0.0.0 --port 8081 --timeout 0
+    environment: *env
+    volumes:
+      - ./outputs:/app/outputs
+      - ./data:/app/data
+    profiles: ["trame", "all"]
+    restart: unless-stopped
+
+  react:
+    image: 3dorth-react:latest
+    container_name: 3dorth-react
+    pull_policy: never
+    network_mode: host
+    # nginx listens on :8088 and proxies /api to the API on the same host
+    environment:
+      NGINX_PORT: "8088"
+      API_UPSTREAM: "127.0.0.1:8000"
+    profiles: ["react", "all"]
+    restart: unless-stopped

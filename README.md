@@ -122,6 +122,35 @@ the URL, and the Share panel polls `/api/config`, so the link updates live with
 no manual step. The URLs are ephemeral and unauthenticated — fine for a quick
 look, not for anything sensitive (use a named Cloudflare tunnel + Access for that).
 
+**Restricted / non-privileged servers** (Rancher/RKE2/containerd, no systemd, no
+sudo, no Docker bridge, and image builds blocked by missing `CAP_SYS_ADMIN`). Build
+the images on any x86-64 machine, ship them over, and run pre-built with host
+networking:
+
+```bash
+# ── on a build machine (or CI) ──
+git clone https://github.com/ArioMoniri/3Dorth.git && cd 3Dorth
+docker compose --profile all build          # tags 3dorth-api/trame/react:latest
+docker save 3dorth-api:latest 3dorth-trame:latest 3dorth-react:latest -o 3dorth-images.tar
+scp -P 30405 3dorth-images.tar root@10.6.110.10:/root/3Dorth/3Dorth/
+
+# ── on the restricted server (root, no sudo) ──
+cd /root/3Dorth/3Dorth               # a clone of the repo lives here (scripts + compose + demo)
+./scripts/start_docker_restricted.sh # starts dockerd (vfs, no bridge, no iptables)
+docker load -i 3dorth-images.tar
+./scripts/deploy_restricted.sh       # auto-tunes to RAM/MIG, runs host-networked, no build
+tmux new -s tunnel './scripts/share.sh 8088 8081'
+cat outputs/public_urls.json         # the public Cloudflare link (also in the app top bar)
+```
+
+`docker-compose.restricted.yml` uses `network_mode: host` and pre-built images (no
+bridge, no build). `scripts/dynamic_resources.sh` reads `free -g` + `nvidia-smi` and
+picks `THREEDORTH_MAX_SESSIONS/COMPUTE_CONCURRENCY/MAX_WORK_VOXELS/GPU` — high on a
+big box, never maxing RAM/VRAM, and safe when `nvidia-smi` returns
+`[Insufficient Permissions]` (GPU then stays off; the app runs CPU-only). The
+Cloudflare tunnel is outbound-only, so no inbound ports are needed and the link
+never exposes SSH/the shell.
+
 <details>
 <summary><b>Performance, memory, and GPU</b></summary>
 
