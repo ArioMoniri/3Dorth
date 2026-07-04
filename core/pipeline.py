@@ -274,6 +274,40 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     }
 
 
+def region_thumbnails(arr, spacing, params, out_dir, prefix: str, size: int = 150) -> list[dict]:
+    """Small per-bone-region renders for the UI's region/side dropdown, so the
+    user can pick the right structure visually. Bounded: only bone regions, small
+    window, heavily decimated meshes. Returns [{label, volume_cm3, boneness, thumb}]."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seg = segment_bone(arr, spacing, params)
+    if seg.n_regions == 0:
+        return []
+    boneness = _boneness_map(arr, seg.labels, int(seg.labels.max()))
+    bones = _bone_regions(seg, boneness) or list(seg.regions[:8])
+    pv.OFF_SCREEN = True
+    out = []
+    for r in bones[:12]:
+        z0, z1, y0, y1, x0, x1 = r.bbox_zyx
+        p = 1
+        sub = seg.labels[max(z0 - p, 0):z1 + p, max(y0 - p, 0):y1 + p,
+                         max(x0 - p, 0):x1 + p] == r.label
+        mesh = mask_to_mesh(sub, spacing, smooth_iters=6, decimate_fraction=0.75)
+        fn = f"{prefix}_r{r.label}.png"
+        thumb = None
+        if mesh.n_points:
+            pl = pv.Plotter(off_screen=True, window_size=(size, size))
+            pl.set_background("white")
+            pl.add_mesh(mesh, color="#cbb994", smooth_shading=True)
+            pl.camera_position = "xz"
+            pl.screenshot(str(out_dir / fn))
+            pl.close()
+            thumb = f"/api/exports/{fn}"
+        out.append({"label": int(r.label), "volume_cm3": round(r.volume_mm3 / 1000, 1),
+                    "boneness": round(float(boneness[r.label]), 3), "thumb": thumb})
+    return out
+
+
 def _compose_transforms(auto, manual):
     """Return ``manual @ auto`` as a 4x4 float array (both 4x4-shaped inputs).
 

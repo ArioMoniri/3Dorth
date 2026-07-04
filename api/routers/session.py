@@ -199,6 +199,24 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
     }
 
 
+@router.get("/session/{sid}/region-thumbnails")
+def region_thumbnails(sid: str, side: str) -> dict:
+    """Small per-bone-region renders for the region dropdown (visual selection)."""
+    s = SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(404, "session not found")
+    sd = s["sides"].get(side)
+    if not sd:
+        raise HTTPException(400, f"unknown side '{side}'")
+    arr = sd.get("arr")
+    if arr is None:  # bare-mesh side has no volume regions
+        return {"thumbnails": []}
+    with R.COMPUTE_SEMAPHORE:
+        thumbs = pipeline.region_thumbnails(arr, sd["spacing"], P.default_parameters(),
+                                            EXPORTS, f"{sid}_{side}")
+    return {"thumbnails": thumbs}
+
+
 @router.post("/session/{sid}/compare")
 def compare(sid: str, req: CompareReq) -> dict:
     s = SESSIONS.get(sid)
