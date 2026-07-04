@@ -197,6 +197,19 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
     if not side:
         raise HTTPException(400, f"unknown side '{req.side}'")
     params = _params(req.params)
+    # Cache by (side, region, compute params): switching views / re-selecting the
+    # same region / toggling a display-only knob then back must NOT re-run the
+    # (slow) segmentation + local-thickness. Display-only params don't change the
+    # geometry, so keying on the full param dict is safe (it just caches more keys).
+    key = hashlib.sha256(
+        f"{req.side}|{req.region_label}|{json.dumps(req.params, sort_keys=True)}".encode()
+    ).hexdigest()[:16]
+    cache = s.setdefault("analyze_cache", OrderedDict())
+    hit = cache.get(key)
+    if hit is not None:
+        cache.move_to_end(key)
+        _stash_ar_mesh(s, hit["mesh"], "thickness_mm", hit["clim"], params.mode_a_colormap)
+        return hit["response"]
     try:
         with R.COMPUTE_SEMAPHORE:  # bound concurrent heavy computes (peak RAM)
             res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
@@ -204,13 +217,9 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
                                              offset_xyz=side["offset_xyz"])
     except ValueError as e:
         raise HTTPException(422, str(e))
-    key = hashlib.sha256(
-        f"{sid}|{req.side}|{req.region_label}|{json.dumps(req.params, sort_keys=True)}".encode()
-    ).hexdigest()[:16]
-    _stash_ar_mesh(s, res["mesh"], "thickness_mm",
-                   (params.mode_a_range_min, params.mode_a_range_max),
-                   params.mode_a_colormap)
-    return {
+    clim = (params.mode_a_range_min, params.mode_a_range_max)
+    _stash_ar_mesh(s, res["mesh"], "thickness_mm", clim, params.mode_a_colormap)
+    response = {
         "geometry_url": _save_mesh(res["mesh"], key),
         "scalar": "thickness_mm",
         "scalar_range": [params.mode_a_range_min, params.mode_a_range_max],
@@ -221,6 +230,10 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
         "stats": res["stats"],
         "metal_fraction": res["metal_fraction"],
     }
+    cache[key] = {"response": response, "mesh": res["mesh"], "clim": clim}
+    while len(cache) > 6:            # bound RAM: a handful of recent results per session
+        cache.popitem(last=False)
+    return response
 
 
 @router.get("/session/{sid}/region-thumbnails")
