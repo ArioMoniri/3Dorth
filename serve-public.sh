@@ -18,10 +18,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# React/trame HOST ports (also what gets tunnelled). API host port via env.
-REACT_HOST_PORT="${REACT_HOST_PORT:-${1:-8088}}"
-TRAME_HOST_PORT="${TRAME_HOST_PORT:-${2:-8081}}"
-API_HOST_PORT="${API_HOST_PORT:-8000}"
+# HOST ports (also what gets tunnelled). Explicit args/env win; otherwise
+# scripts/pick_ports.sh auto-selects FREE ports (some may be taken on the server).
+[ -n "${1:-}" ] && REACT_PORT="${REACT_PORT:-$1}"
+[ -n "${2:-}" ] && TRAME_PORT="${TRAME_PORT:-$2}"
+REACT_PORT="${REACT_PORT:-${REACT_HOST_PORT:-}}"
+TRAME_PORT="${TRAME_PORT:-${TRAME_HOST_PORT:-}}"
+API_PORT="${API_PORT:-${API_HOST_PORT:-}}"
+# shellcheck disable=SC1091
+. ./scripts/pick_ports.sh                          # fills any unset with a free port
+REACT_HOST_PORT="$REACT_PORT"; TRAME_HOST_PORT="$TRAME_PORT"; API_HOST_PORT="$API_PORT"
 BIND_ADDR="${BIND_ADDR:-0.0.0.0}"
 export REACT_HOST_PORT TRAME_HOST_PORT API_HOST_PORT BIND_ADDR
 

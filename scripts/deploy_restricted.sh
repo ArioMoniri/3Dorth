@@ -12,16 +12,31 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 COMPOSE="docker compose -p 3dorth -f docker-compose.restricted.yml --profile all"
-DOWN=0; PRUNE=0
+DOWN=0; PRUNE=0; EXPOSE=0
 for a in "$@"; do case "$a" in
   --down)     DOWN=1 ;;
   --prune)    PRUNE=1 ;;
+  --expose)   EXPOSE=1 ;;                 # bind 0.0.0.0 (pod-net reachable) instead of tunnel-only
   --no-build) : ;;                       # accepted for clarity; this path never builds
-  *) echo "unknown flag: $a  (use --down / --prune / --no-build)"; exit 2 ;;
+  *) echo "unknown flag: $a  (use --down / --prune / --expose / --no-build)"; exit 2 ;;
 esac; done
+
+# Bind mode: STRICT (default) = 127.0.0.1, only the local tunnel reaches the app;
+# --expose = 0.0.0.0, reachable on the pod network too.
+if [ "$EXPOSE" = 1 ]; then
+  export APP_BIND=0.0.0.0 NGINX_LISTEN_ADDR=""
+  echo "▶ bind mode: EXPOSED (0.0.0.0 — reachable on the pod network)"
+else
+  export APP_BIND=127.0.0.1 NGINX_LISTEN_ADDR="127.0.0.1:"
+  echo "▶ bind mode: STRICT (127.0.0.1 — only the local Cloudflare tunnel reaches the app)"
+fi
 
 # ---- 0. dockerd (restricted mode) -----------------------------------------
 ./scripts/start_docker_restricted.sh || exit 1
+
+# ---- pick free host ports (some may be taken on this server) --------------
+# shellcheck disable=SC1091
+. ./scripts/pick_ports.sh
 
 # ---- cleanup: stop the app + remove stale containers (keep volumes) --------
 echo "▶ cleaning up any previous 3Dorth containers…"
@@ -58,25 +73,28 @@ mkdir -p outputs data/raw
 echo "▶ starting the stack (host networking, pre-built images, no build)…"
 $COMPOSE up -d --no-build --pull never
 
-# ---- 4. wait for the API on :8000 -----------------------------------------
-printf "▶ waiting for the API on :8000"
+# ---- 4. wait for the API on its chosen port -------------------------------
+printf "▶ waiting for the API on :%s" "$API_PORT"
 ok=""
 for _ in $(seq 1 80); do
-  if curl -fsS -m 3 "http://127.0.0.1:8000/api/config" >/dev/null 2>&1; then ok=1; break; fi
+  if curl -fsS -m 3 "http://127.0.0.1:${API_PORT}/api/config" >/dev/null 2>&1; then ok=1; break; fi
   printf "."; sleep 3
 done
 echo
 if [ -z "$ok" ]; then
-  echo "✗ API is not answering on :8000."
+  echo "✗ API is not answering on :${API_PORT}."
   echo "  logs: $COMPOSE logs api"
   exit 1
 fi
 
-echo "✓ 3Dorth is up (host networking):"
-echo "    API   http://127.0.0.1:8000/docs"
-echo "    React http://127.0.0.1:8088"
-echo "    trame http://127.0.0.1:8081"
+# Persist the chosen ports so share.sh / a later shell can pick them up.
+printf 'REACT_PORT=%s\nTRAME_PORT=%s\nAPI_PORT=%s\n' "$REACT_PORT" "$TRAME_PORT" "$API_PORT" > outputs/ports.env
+
+echo "✓ 3Dorth is up (host networking, ${APP_BIND} bind):"
+echo "    API   http://127.0.0.1:${API_PORT}/docs"
+echo "    React http://127.0.0.1:${REACT_PORT}"
+echo "    trame http://127.0.0.1:${TRAME_PORT}"
 echo
 echo "▶ open the public Cloudflare link (outbound-only; no inbound ports needed):"
-echo "    tmux new -s tunnel './scripts/share.sh 8088 8081'"
+echo "    tmux new -s tunnel './scripts/share.sh ${REACT_PORT} ${TRAME_PORT}'"
 echo "    cat outputs/public_urls.json     # the URL, also shown in the app top bar"

@@ -138,18 +138,35 @@ scp -P 30405 3dorth-images.tar root@10.6.110.10:/root/3Dorth/3Dorth/
 cd /root/3Dorth/3Dorth               # a clone of the repo lives here (scripts + compose + demo)
 ./scripts/start_docker_restricted.sh # starts dockerd (vfs, no bridge, no iptables)
 docker load -i 3dorth-images.tar
-./scripts/deploy_restricted.sh       # auto-tunes to RAM/MIG, runs host-networked, no build
+./scripts/deploy_restricted.sh       # STRICT bind (127.0.0.1), auto-tunes to RAM/MIG,
+                                     # AUTO-PICKS free ports, host-networked, no build
+# deploy_restricted.sh prints the exact next line with the chosen ports, e.g.:
 tmux new -s tunnel './scripts/share.sh 8088 8081'
 cat outputs/public_urls.json         # the public Cloudflare link (also in the app top bar)
 ```
 
 `docker-compose.restricted.yml` uses `network_mode: host` and pre-built images (no
-bridge, no build). `scripts/dynamic_resources.sh` reads `free -g` + `nvidia-smi` and
-picks `THREEDORTH_MAX_SESSIONS/COMPUTE_CONCURRENCY/MAX_WORK_VOXELS/GPU` — high on a
-big box, never maxing RAM/VRAM, and safe when `nvidia-smi` returns
-`[Insufficient Permissions]` (GPU then stays off; the app runs CPU-only). The
-Cloudflare tunnel is outbound-only, so no inbound ports are needed and the link
-never exposes SSH/the shell.
+bridge, no build). Ports are **dynamic** — `scripts/pick_ports.sh` avoids any port
+already in use and `deploy_restricted.sh` prints the exact `share.sh` command with
+the chosen ones (also written to `outputs/ports.env`). The default bind is **strict
+`127.0.0.1`** so only the local Cloudflare tunnel can reach the app (nothing on the
+pod network); pass `--expose` for `0.0.0.0`. `scripts/dynamic_resources.sh` reads
+`free -g` + `nvidia-smi` and picks
+`THREEDORTH_MAX_SESSIONS/COMPUTE_CONCURRENCY/MAX_WORK_VOXELS/GPU` — high on a big box,
+never maxing RAM/VRAM, and safe when `nvidia-smi` returns `[Insufficient Permissions]`
+(GPU then stays off; the app runs CPU-only). The Cloudflare tunnel is outbound-only,
+so no inbound ports are needed and the link never exposes SSH/the shell.
+
+### Which deploy? (normal vs strict)
+
+| | command | networking | bind | ports |
+|---|---|---|---|---|
+| **Normal** (own box / VM) | `./serve-public.sh` or `./deploy.sh` | Docker bridge | `0.0.0.0` (behind your firewall) | auto-picked, or `REACT_HOST_PORT=…` |
+| **Strict / tunnel-only** | `BIND_ADDR=127.0.0.1 ./serve-public.sh` | Docker bridge | `127.0.0.1` (tunnel is the only door) | auto-picked |
+| **Restricted server** (RKE2, no build/bridge/systemd) | `./scripts/deploy_restricted.sh` | host (no bridge) | `127.0.0.1` strict (default) · `--expose` for `0.0.0.0` | auto-picked |
+
+All three print the public Cloudflare link and keep it alive; none need an inbound
+port opened.
 
 <details>
 <summary><b>Performance, memory, and GPU</b></summary>
@@ -168,6 +185,47 @@ not exhaust RAM on a small machine, and uses the GPU where present:
 All limits are environment variables so a device can be sized:
 `THREEDORTH_MAX_SESSIONS`, `THREEDORTH_COMPUTE_CONCURRENCY`,
 `THREEDORTH_MAX_WORK_VOXELS`, `THREEDORTH_MAX_ISO_VOXELS`, `THREEDORTH_GPU`.
+
+</details>
+
+<details>
+<summary><b>Security &amp; scaling — what's handled, and the honest gaps</b></summary>
+
+**Security (handled)**
+- **Tunnel isolation** — the Cloudflare tunnel is outbound-only and forwards *only*
+  the app's HTTP port; it is never a path to SSH or your shell. Strict mode
+  (`BIND_ADDR=127.0.0.1`, or `deploy_restricted.sh` by default) binds the app to
+  localhost so nothing on the LAN/pod network can reach it — the tunnel is the only door.
+- **Inputs** — nginx caps uploads at 300 MB; ingest sanitises archive paths (no
+  directory traversal / arbitrary file read); heavy compute is bounded by a semaphore
+  so one caller can't exhaust the box.
+- **Data** — no PHI is baked into the images (the demo is de-identified NIfTI);
+  uploads are the user's own data and, in restricted mode, ephemeral unless you
+  persist `./data`. Containers run as a **non-root** user; no privileged flags.
+- **Transport** — TLS is terminated at Cloudflare's edge and the edge→origin hop
+  rides the encrypted tunnel.
+
+**Security (honest gaps — add these for real multi-tenant use)**
+- **No app-level auth or rate-limiting** beyond the compute semaphore: *anyone with
+  the URL* can upload and compute. Put **Cloudflare Access** (a named tunnel + email/
+  SSO) in front for a controlled audience, or keep the quick-tunnel URL private and
+  rotate it (restart `share.sh`). This is a research tool, not a hardened service.
+
+**Scaling**
+- **Vertical (works today)** — the compute knobs auto-tune to the box
+  (`dynamic_resources.sh` / `serve-public.sh`); raise `THREEDORTH_COMPUTE_CONCURRENCY`
+  for more parallel computes (costs CPU/RAM), and `THREEDORTH_MAX_WORK_VOXELS` trades
+  speed for resolution. RAM is bounded by int16 volumes + adaptive downsampling + LRU
+  session eviction (`THREEDORTH_MAX_SESSIONS`). One big node (e.g. the H200 box)
+  serves many users this way.
+- **Horizontal (the honest limit)** — sessions live **in memory in one API process**,
+  so you can't naively load-balance across replicas — a user's scan is pinned to the
+  node that ingested it. Multi-node scaling needs sticky routing or shared session
+  storage (not implemented), which is the only case where Kubernetes actually earns
+  its complexity here. Ask and I'll add sticky-session manifests.
+- **GPU** — distance transforms use CuPy when a CUDA device is reachable, else CPU;
+  in a restricted container without device passthrough it is CPU-only (the app falls
+  back automatically).
 
 </details>
 

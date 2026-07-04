@@ -26,7 +26,10 @@ services:
     container_name: 3dorth-api
     pull_policy: never                 # never reach a registry; use the loaded image
     network_mode: host                 # no bridge available in this container
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    # Ports are dynamic (scripts/pick_ports.sh) and the bind address defaults to
+    # 127.0.0.1 (STRICT: only the local Cloudflare tunnel reaches it — nothing on
+    # the pod network). Set APP_BIND=0.0.0.0 for the "normal/exposed" mode.
+    command: uvicorn api.main:app --host ${APP_BIND:-127.0.0.1} --port ${API_PORT:-8000}
     environment: *env
     volumes:
       - ./outputs:/app/outputs         # share.sh writes public_urls.json here; /api/config reads it
@@ -38,8 +41,7 @@ services:
     container_name: 3dorth-trame
     pull_policy: never
     network_mode: host
-    # bind :8081 on the host (matches ./scripts/share.sh 8088 8081)
-    command: xvfb-run -a python -m app_trame.app --server --host 0.0.0.0 --port 8081 --timeout 0
+    command: xvfb-run -a python -m app_trame.app --server --host ${APP_BIND:-127.0.0.1} --port ${TRAME_PORT:-8081} --timeout 0
     environment: *env
     volumes:
       - ./outputs:/app/outputs
@@ -52,9 +54,12 @@ services:
     container_name: 3dorth-react
     pull_policy: never
     network_mode: host
-    # nginx listens on :8088 and proxies /api to the API on the same host
+    # nginx listens on the chosen REACT_PORT and proxies /api to the API on the same
+    # host. NGINX_LISTEN_ADDR defaults to 127.0.0.1: (STRICT tunnel-only); set it to
+    # "" (with APP_BIND=0.0.0.0) for the exposed mode.
     environment:
-      NGINX_PORT: "8088"
-      API_UPSTREAM: "127.0.0.1:8000"
+      NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR-127.0.0.1:}"
+      NGINX_PORT: "${REACT_PORT:-8088}"
+      API_UPSTREAM: "127.0.0.1:${API_PORT:-8000}"
     profiles: ["react", "all"]
     restart: unless-stopped
