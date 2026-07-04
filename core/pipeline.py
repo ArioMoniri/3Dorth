@@ -406,3 +406,22 @@ def apply_affine(mat, xyz) -> tuple:
     M = np.asarray(mat, dtype=np.float64).reshape(4, 4)
     p = M[:3, :3] @ np.asarray(xyz, dtype=np.float64) + M[:3, 3]
     return (float(p[0]), float(p[1]), float(p[2]))
+
+
+def map_plane(mat, origin, normal) -> tuple:
+    """Map a cutting plane (origin point + unit normal) through a 4x4 affine.
+
+    The origin moves by the full affine; the normal by the linear part's inverse-
+    transpose (which equals the rotation for a rigid transform, so the plane stays
+    a plane of the same physical cut). Returns (origin_xyz, unit_normal_xyz)."""
+    M = np.asarray(mat, dtype=np.float64).reshape(4, 4)
+    o = apply_affine(M, origin)
+    A = M[:3, :3]
+    try:
+        n = np.linalg.inv(A).T @ np.asarray(normal, dtype=np.float64)
+    except np.linalg.LinAlgError:                      # singular linear part
+        n = A @ np.asarray(normal, dtype=np.float64)
+    ln = np.linalg.norm(n)
+    if ln > 0:
+        n = n / ln
+    return (o, (float(n[0]), float(n[1]), float(n[2])))

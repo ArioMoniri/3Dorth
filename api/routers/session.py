@@ -388,29 +388,45 @@ class CompareSliceReq(BaseModel):
     manual_transform: list[list[float]] | None = None
 
 
-def _compare_map(s: dict, sid: str, req: "CompareSliceReq"):
-    """Return (cached) registration world-map for (reference_side, target_side)."""
-    ref = s["sides"].get(req.reference_side)
-    tgt = s["sides"].get(req.target_side)
+def _compare_map(s: dict, reference_side: str, target_side: str,
+                 params_dict: dict, manual_transform):
+    """Return (ref, tgt, reg) with the registration world-map for the side pair,
+    computed once and cached per (sides, params, manual) — reused by both the
+    linked-slice and the oblique-compare endpoints."""
+    ref = s["sides"].get(reference_side)
+    tgt = s["sides"].get(target_side)
     if not ref or not tgt:
         raise HTTPException(400, "unknown side(s)")
     if ref.get("arr") is None or tgt.get("arr") is None:
         raise HTTPException(400, "both sides must be volumes (not bare meshes)")
     ckey = hashlib.sha256(
-        f"{req.reference_side}|{req.target_side}|{json.dumps(req.params, sort_keys=True)}"
-        f"|{req.manual_transform}".encode()
+        f"{reference_side}|{target_side}|{json.dumps(params_dict, sort_keys=True)}"
+        f"|{manual_transform}".encode()
     ).hexdigest()[:16]
     cache = s.setdefault("compare_maps", OrderedDict())
     reg = cache.get(ckey)
     if reg is None:
-        params = _params(req.params)
+        params = _params(params_dict)
         with R.COMPUTE_SEMAPHORE:
             reg = pipeline.compare_registration(ref, tgt, params,
-                                                manual_transform=req.manual_transform)
+                                                manual_transform=manual_transform)
         cache[ckey] = reg
         while len(cache) > 4:            # a handful of param sets per session
             cache.popitem(last=False)
     return ref, tgt, reg
+
+
+def _reg_gate(reg: dict) -> dict:
+    """Uniform reliability gate + note for the compare endpoints."""
+    reliable = reg["inlier_fraction"] >= _MIN_RELIABLE_INLIER
+    return {
+        "rms_mm": round(reg["rms"], 3),
+        "inlier_fraction": round(reg["inlier_fraction"], 3),
+        "reliable": bool(reliable),
+        "note": ("registration is well-constrained" if reliable else
+                 "low overlap — the matched target reformat is unreliable "
+                 "(isolate the bone / adjust registration first)"),
+    }
 
 
 def _side_slices(sd: dict, world_xyz) -> dict:
@@ -427,21 +443,69 @@ def compare_slice_map(sid: str, req: CompareSliceReq) -> dict:
     s = SESSIONS.get(sid)
     if not s:
         raise HTTPException(404, "session not found")
-    ref, tgt, reg = _compare_map(s, sid, req)
+    ref, tgt, reg = _compare_map(s, req.reference_side, req.target_side,
+                                 req.params, req.manual_transform)
     tgt_world = pipeline.apply_affine(reg["ref_world_to_tgt_world"], req.world_xyz_mm)
-    reliable = reg["inlier_fraction"] >= _MIN_RELIABLE_INLIER
     return {
         "reference": _side_slices(ref, req.world_xyz_mm),
         "target": _side_slices(tgt, tgt_world),
-        "registration": {
-            "rms_mm": round(reg["rms"], 3),
-            "inlier_fraction": round(reg["inlier_fraction"], 3),
-            "reliable": bool(reliable),
-            "note": ("registration is well-constrained" if reliable else
-                     "low overlap — the linked target slice is unreliable "
-                     "(isolate the bone / adjust registration first)"),
-        },
+        "registration": _reg_gate(reg),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Oblique compare (the two-bone matched cross-section): ONE movable oblique plane
+# on the reference bone, mapped through the cached registration onto the target
+# bone, so both bones' 2D reformats are shown side by side ("2 boxes") for the
+# same anatomical cut. Same reliability gate as the linked-slice endpoint.
+# --------------------------------------------------------------------------- #
+class ObliqueCompareReq(BaseModel):
+    reference_side: str = "left"
+    target_side: str = "right"
+    origin_xyz_mm: list[float]
+    normal: list[float]
+    up: list[float] | None = None
+    size_mm: float = 220.0
+    px_mm: float = 1.0
+    max_dim: int = 512
+    window: float = mpr.BONE_WINDOW
+    level: float = mpr.BONE_LEVEL
+    params: dict = {}
+    manual_transform: list[list[float]] | None = None
+
+
+def _oblique_of(sd: dict, origin, normal, req: "ObliqueCompareReq") -> dict:
+    import base64
+    png, meta = mpr.render_oblique_png(
+        sd["arr"], sd["spacing"], sd["offset_xyz"], origin, normal, up=req.up,
+        size_mm=float(min(max(req.size_mm, 10.0), 1000.0)),
+        px_mm=float(min(max(req.px_mm, 0.1), 10.0)),
+        max_dim=int(max(32, min(1024, req.max_dim))),
+        window=req.window, level=req.level)
+    return {"image_png_base64": base64.b64encode(png).decode("ascii"), "meta": meta}
+
+
+@router.post("/session/{sid}/oblique-compare")
+def oblique_compare(sid: str, req: ObliqueCompareReq) -> dict:
+    s = SESSIONS.get(sid)
+    if not s:
+        raise HTTPException(404, "session not found")
+    if len(req.origin_xyz_mm) != 3 or len(req.normal) != 3:
+        raise HTTPException(422, "origin_xyz_mm and normal must be length-3")
+    ref, tgt, reg = _compare_map(s, req.reference_side, req.target_side,
+                                 req.params, req.manual_transform)
+    # Same physical cut on both bones: map the reference plane through the rigid
+    # registration onto the target (origin by the affine, normal by its rotation).
+    tgt_origin, tgt_normal = pipeline.map_plane(
+        reg["ref_world_to_tgt_world"], req.origin_xyz_mm, req.normal)
+    try:
+        return {
+            "reference": _oblique_of(ref, req.origin_xyz_mm, req.normal, req),
+            "target": _oblique_of(tgt, tgt_origin, tgt_normal, req),
+            "registration": _reg_gate(reg),
+        }
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @router.post("/session/{sid}/compare")
