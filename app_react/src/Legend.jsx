@@ -6,9 +6,9 @@
 // min/max, steps, reverse).
 //
 // Layout: high value at the top, green at the bottom -> red at the top, with
-// the N+1 step boundaries labelled to 4 decimals alongside the swatch edges.
+// the `steps` boundary values labelled to 4 decimals alongside the swatch edges.
 
-import { legendBands, legendBoundaries } from './colors';
+import { legendBands, legendBoundaries, fmt4 } from './colors';
 
 export default function Legend({ rangeMin, rangeMax, steps, reverse, title }) {
   const bands = legendBands({ rangeMin, rangeMax, steps, reverse });
@@ -30,7 +30,7 @@ export default function Legend({ rangeMin, rangeMax, steps, reverse, title }) {
         <div className="legend-ticks">
           {boundariesTopFirst.map((v, i) => (
             <div key={i} className="legend-tick">
-              {v.toFixed(4)}
+              {fmt4(v)}
             </div>
           ))}
         </div>

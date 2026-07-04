@@ -71,8 +71,7 @@ export default function ControlPanel({
           </button>
         </div>
         <p className="panel-hint">
-          {controls.length} controls (Mode {'A'}/{'B'} subset) — generated from
-          the registry.
+          {controls.length} controls for this mode — generated from the registry.
         </p>
         {groups.map((group) => (
           <details key={group} open className="param-group">

@@ -27,15 +27,24 @@ function lerp3(a, b, u) {
   return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u];
 }
 
-// Build a piecewise-CONSTANT color transfer function with `steps` flat bands
-// across [rangeMin, rangeMax]. Constant bands are produced by placing two nodes
-// with the same color at each band's edges, so vtk.js does not interpolate
-// across a band. `reverse` flips the color order (matches mode_a_colormap_reverse).
+// `steps` is the number of legend TICK LABELS (= band boundaries), matching the
+// paper Fig. 2 / trame `n_labels`. There is therefore one fewer color band than
+// labels: bandCount = steps - 1. For the defaults (steps=7) this yields the 7
+// boundary labels 0.1537..6.5202 and 6 discrete color bands.
+function bandCount(steps) {
+  return Math.max(1, Math.round(steps) - 1);
+}
+
+// Build a piecewise-CONSTANT color transfer function with `bandCount(steps)`
+// flat bands across [rangeMin, rangeMax]. Constant bands are produced by placing
+// two nodes with the same color at each band's edges, so vtk.js does not
+// interpolate across a band. `reverse` flips the color order (matches
+// mode_a_colormap_reverse).
 export function buildDiscreteLUT({ rangeMin, rangeMax, steps, reverse = false }) {
   const ctf = vtkColorTransferFunction.newInstance();
   ctf.removeAllPoints();
 
-  const n = Math.max(2, Math.round(steps));
+  const n = bandCount(steps);
   const span = rangeMax - rangeMin || 1;
   const eps = span * 1e-6;
 
@@ -59,7 +68,7 @@ export function buildDiscreteLUT({ rangeMin, rangeMax, steps, reverse = false })
 // The list of {color, lo, hi} bands, used by the HTML legend so it matches the
 // vtk LUT exactly.
 export function legendBands({ rangeMin, rangeMax, steps, reverse = false }) {
-  const n = Math.max(2, Math.round(steps));
+  const n = bandCount(steps);
   const span = rangeMax - rangeMin || 1;
   const bands = [];
   for (let i = 0; i < n; i += 1) {
@@ -75,17 +84,26 @@ export function legendBands({ rangeMin, rangeMax, steps, reverse = false }) {
   return bands;
 }
 
-// The N+1 step-boundary values across [rangeMin, rangeMax]. For the paper
-// defaults (0.1537..6.5202, 7 steps) this is exactly:
-//   0.1537, 1.2148, 2.2759, 3.3370, 4.3980, 5.4591, 6.5202
+// The `steps` boundary/tick values across [rangeMin, rangeMax] (one per label,
+// = bandCount+1 = steps). For the paper defaults (0.1537..6.5202, steps=7) this
+// is exactly: 0.1537, 1.2148, 2.2759, 3.3370, 4.3980, 5.4591, 6.5202.
 export function legendBoundaries({ rangeMin, rangeMax, steps }) {
-  const n = Math.max(2, Math.round(steps));
+  const n = bandCount(steps); // n bands -> n+1 = steps boundaries
   const span = rangeMax - rangeMin;
   const out = [];
   for (let i = 0; i <= n; i += 1) {
     out.push(rangeMin + (span * i) / n);
   }
   return out;
+}
+
+// Format a value to 4 decimals using round-half-up with a tiny bias, so binary
+// floating-point representation error doesn't drop a trailing half-digit (e.g.
+// the boundary 3.33695 formats as "3.3370", not "3.3369"). This reproduces the
+// article's tabulated legend values exactly.
+export function fmt4(value) {
+  const rounded = Math.floor(value * 1e4 + 0.5 + 1e-6) / 1e4;
+  return rounded.toFixed(4);
 }
 
 export const NEUTRAL_HEX = '#3a3f7a';
