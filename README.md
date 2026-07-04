@@ -1,43 +1,46 @@
-# 3Dorth — 3D cortical bone mapping and comparison from CT
+<p align="center">
+  <img src="docs/assets/header.svg" alt="3Dorth — cortical bone mapping from CT" width="100%">
+</p>
 
-3Dorth measures cortical (wall) thickness across a bone surface from a CT scan
-and renders it as a colored 3D map, and it compares two bones (for example an
-operated shoulder against the contralateral side) as a signed millimetric
-surface-deviation map. It reproduces the cortical-thickness pipeline from Guo et
-al. 2022 with open-source tools and generalizes it: it loads whatever bone is in
-the scan, lets you filter and select regions after loading, and exposes the
-anatomy-specific choices as controls rather than hard-coding them.
+# 3Dorth — cortical bone mapping from CT
 
-The immediate motivation is a clinical question — does anchor/tendon-repair
-surgery cause long-term bony remodeling in the proximal humerus? — but nothing
-in the tool is specific to the humerus.
+3Dorth reads a CT scan of a bone, measures how thick the cortex (the hard outer
+wall) is across the whole surface, and paints that thickness onto a 3D model you
+can rotate. It can also line up two bones — an operated shoulder against the
+healthy other side, say — and show where bone has been added or lost, in
+millimetres.
 
-> Research tooling, not a clinical diagnostic. Every output is de-identified.
+It reproduces the cortical-thickness method from **Guo et al. 2022** (proximal
+humerus) and generalises it: it loads whatever bone is in the scan and puts the
+anatomy-specific choices on sliders instead of hard-coding them.
 
-## What it does
+The question behind it is clinical — does suture-anchor repair change the bone of
+the proximal humerus over the years? — but nothing in the tool is humerus-only.
 
-- **Mode A — cortical thickness (single scan).** Segment bone (Hounsfield
-  window), compute per-surface cortical thickness in millimetres, and render it
-  with the paper's discrete green→red colorbar. Point/line and height
-  measurement tools reproduce the figures in the source paper.
-- **Mode B — two-scan / two-side comparison.** Reconstruct both bones,
-  auto-register (with an optional sagittal mirror for left/right), and compute a
-  signed surface deviation (bone gain vs loss) with per-region statistics.
+> Research tool, not a diagnostic. Every output is de-identified.
 
-Everything configurable lives in one parameter registry
-([`core/parameters.py`](core/parameters.py)); the defaults reproduce the paper.
-Both frontends build their control panels from that registry, so the two UIs
-always expose the same knobs.
+## What you get
 
-## One-line deploy (server)
+| Mode A — cortical thickness | Mode B — left/right deviation |
+|---|---|
+| ![Thickness map](docs/assets/phase2_thickness.png) | ![Signed deviation map](docs/assets/qa_trame_rework_deviation.png) |
+| One scan. Green = thin wall, red = thick, in mm. | Two sides registered; red = bone gained, blue = lost. |
 
-Docker and the Compose plugin are the only prerequisites.
+- **Mode A** segments the bone from its CT density, computes wall thickness at
+  every surface point, and colours it with the paper's green→red scale. Point,
+  line, and height tools reproduce the source figures.
+- **Mode B** rebuilds both bones, aligns them (with an optional left/right
+  mirror), and reports a signed surface deviation with per-region statistics.
+
+## Get it running
+
+Docker and the Compose plugin are all you need on the server:
 
 ```bash
 git clone https://github.com/ArioMoniri/3Dorth.git && cd 3Dorth && ./deploy.sh
 ```
 
-That builds the images and starts the API plus both frontends:
+That builds everything and starts the API plus both frontends:
 
 | Service | URL |
 |---|---|
@@ -45,50 +48,59 @@ That builds the images and starts the API plus both frontends:
 | trame UI | `http://<server>:8081` |
 | API + docs | `http://<server>:8000/docs` |
 
-No patient data is baked into the image — upload a CT `.zip` in the UI to begin.
-`./run.sh react` or `./run.sh trame` start only one frontend; `./run.sh down`
-stops everything. Behind a reverse proxy, keep the WebSocket upgrade headers and
-long read timeouts already set in [`deploy/nginx.conf`](deploy/nginx.conf), and
-allow ~300 MB uploads. A machine with 8 GB RAM is comfortable; volumes and
-meshes are held in memory during compute.
+No patient data is in the image — upload a CT `.zip` in the UI to start.
+`./run.sh react` or `./run.sh trame` bring up just one frontend; `./run.sh down`
+stops everything.
 
-## Run locally (development)
+**Share it temporarily.** With the servers running, `./scripts/share.sh` opens
+public Cloudflare tunnels to both UIs and writes the URLs so the in-app share
+panel picks them up. The URLs are ephemeral and unauthenticated — fine for a
+quick look, not for anything sensitive.
 
-```bash
-uv venv --python 3.12 .venv
-uv pip install -r requirements.txt
-make test            # 80+ tests
-python scripts/watchdog.py   # independent verification, should be GREEN
+## Which frontend?
 
-# then, in three terminals:
-.venv/bin/python -m uvicorn api.main:app --port 8000        # API
-cd app_react && npm install && npm run dev                  # React on :5173
-.venv/bin/python -m app_trame.app --server --port 8081 --timeout 0   # trame
-```
+Both run the same analysis; they differ in where the 3D drawing happens.
 
-Python 3.12 is required (the imaging stack — SimpleITK, VTK, open3d — has no
-wheels for 3.13/3.14 yet).
+- **trame** renders on the server with VTK and calls the Python core directly.
+  Nothing to build, quickest to stand up — use it to look at your own data.
+- **React** renders in the browser and talks to the API. More setup, but scales
+  to many users and is easier to embed — use it when deploying for a group.
 
-## The two frontends — which one should I use?
+Both build their control panels from the same parameter list, so they always
+expose the same knobs (a test fails the build if they ever drift apart).
 
-Both do the same analysis; they differ in where the rendering happens.
+<p align="center">
+  <img src="docs/assets/phase1_regions.png" alt="Region view in the React UI" width="49%">
+  <img src="docs/assets/qa_trame_rework.png" alt="Thickness map in the trame UI" width="49%">
+</p>
+<p align="center"><sub>Left: region view (React). Right: thickness map (trame). Same analysis, two viewers.</sub></p>
 
-- **trame** (`app_trame/`, trame + pyvista) renders server-side with VTK and
-  calls the Python core directly. It is the quickest to stand up, needs no
-  Node build, and is a good fit for internal/research use on one machine.
-- **React + vtk.js** (`app_react/`, Vite SPA) renders in the browser and talks
-  to the FastAPI backend. It is more work to build but scales to many users and
-  is easier to embed or customize.
+<details>
+<summary><b>Using it, step by step</b></summary>
 
-If you just want to look at your data, use trame. If you are deploying for a
-group or embedding the viewer elsewhere, use React.
+1. **Load** a CT `.zip` (the sample archives wrap a Weasis viewer around a
+   `dicom/` folder — the ingest recurses past it), or use the bundled demo scan
+   locally. The ingest reports geometry, laterality, and hardware, and splits a
+   bilateral scan into left/right.
+2. **Mode A** — pick a side, adjust parameters if you want (they default to the
+   paper's values), and Apply. The server re-segments and recomputes the map.
+   Region toggles hide non-bone (table, ribs); line/height tools reproduce the
+   paper's measurements.
+3. **Mode B** — choose a reference side and a target side, turn on the sagittal
+   mirror for a left/right comparison, and compute. The panel reports the
+   registration error, the deviation statistics, and the percent of surface past
+   1 mm and 2 mm, split into gain and loss.
 
-## Method and reproduced defaults
+</details>
 
-Segmentation and thickness follow **Guo et al. 2022, *Eur J Med Res* 27:102**
-(3D cortical bone mapping of the proximal-humerus surgical neck). The full
-mapping of each default to the paper is in [`docs/METHOD.md`](docs/METHOD.md);
-the headline values, all confirmed against the source:
+<details>
+<summary><b>Full parameter list (28 knobs) and reproducibility</b></summary>
+
+Everything configurable lives in one registry,
+[`core/parameters.py`](core/parameters.py) — all 28 parameters with ranges and
+units. Both UIs read that registry, and the active values are written to
+[`config.yaml`](config.yaml), so re-running from a saved `config.yaml`
+reproduces the numbers. The defaults reproduce Guo et al. 2022:
 
 | Parameter | Default | From the paper |
 |---|---|---|
@@ -98,73 +110,80 @@ the headline values, all confirmed against the source:
 | Colorbar | green→red, 7 steps, 0.1537–6.5202 mm | Fig. 2 legend |
 | Sampling line | 3 points below the lesser tuberosity | Fig. 2A |
 
-Local thickness is the largest-inscribed-sphere thickness of the segmented
-cortical mask. A second method — two-surface ray casting — is implemented as a
-cross-check; on a hollow-shell phantom the two agree, and on the real proximal
-humerus the local-thickness whole-surface mean (~2.8 mm) sits inside the paper's
-Table-1 range (2.1–2.85 mm). The two diverge in dense subcortical trabecular
-bone, which is expected and is why density-deconvolution methods (Treece/Poole)
-are noted as future work rather than used as the primary measure.
+</details>
 
-Mode B signed distance uses the convention **positive = target surface outside
-the reference** (bone gain); the sign is verified on concentric-sphere phantoms
-before any real result is reported.
+<details>
+<summary><b>Method and how it was checked</b></summary>
 
-## Usage
+Segmentation and thickness follow **Guo et al. 2022, _Eur J Med Res_ 27:102**
+(3D cortical bone mapping of the proximal-humerus surgical neck). The full
+mapping of each default to the paper is in [`docs/METHOD.md`](docs/METHOD.md).
 
-1. **Load.** Open a frontend and upload a CT `.zip` (the sample archives wrap a
-   Weasis viewer around a `dicom/` folder — the ingest recurses past it), or use
-   the bundled demo scan when running locally. The ingest reports geometry,
-   laterality, and hardware, and splits a bilateral scan into left/right sides.
-2. **Mode A.** Pick a side, adjust any parameters (they default to the paper's
-   values), and Apply — the server re-segments and recomputes the thickness map.
-   Use the region toggles to hide non-bone (table, contralateral structures) and
-   the line/height tools to reproduce the paper's measurements.
-3. **Mode B.** Choose a reference and target side, enable the sagittal mirror for
-   a left/right comparison, and compute the signed-deviation map. The panel
-   reports registration RMS, the deviation statistics, and the percent of surface
-   beyond 1 mm and 2 mm split by sign.
+Thickness is the largest-inscribed-sphere ("local") thickness of the cortical
+mask. A second method — two-surface ray casting — is kept as a cross-check: the
+two agree on a hollow-shell phantom, and on the real humerus the local-thickness
+whole-surface mean (~2.8 mm) sits inside the paper's Table-1 range (2.1–2.85 mm).
+They diverge in dense subcortical trabecular bone, which is expected — that is
+why density-deconvolution methods (Treece/Poole) are noted as future work rather
+than used as the main measure.
 
-## Parameters
+For Mode B, positive means the target surface sits **outside** the reference
+(bone gain); the sign is verified on concentric-sphere phantoms before any real
+result is reported.
 
-All 28 parameters are listed with ranges and units in
-[`core/parameters.py`](core/parameters.py) and surfaced identically in both UIs.
-The active set is written to [`config.yaml`](config.yaml) so a run is
-reproducible; re-running from a saved `config.yaml` reproduces the numbers.
+The paper's publication figure — the discrete colorbar and thickness map — is
+reproduced below.
 
-## Feature parity
+![Publication-style thickness figure](docs/assets/figure_thickness.png)
 
-Analysis logic lives only in `core/`; the API and both UIs are thin. Any new
-configurable knob is added once to the registry and appears in both frontends
-automatically. `tests/unit/test_parity.py` fails the build if the two UIs ever
-expose a different parameter set. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+</details>
 
-## Limitations
+<details>
+<summary><b>Run locally (development)</b></summary>
 
-- **A single subject supports description, not causal inference.** Left/right
-  differences in one person conflate surgical change with normal
-  dominant-arm asymmetry.
-- **Segmentation and registration carry uncertainty.** A bone that is fused to
-  neighbouring structures in the scan (e.g. an adducted humerus against the
-  ribcage) needs manual region selection or clipping to isolate before Mode B is
-  meaningful; auto-isolation can pick the wrong structure.
-- **CT cannot see radiolucent hardware.** Bioabsorbable/PEEK suture anchors do
-  not appear, so the operated side cannot always be inferred from the scan.
-- **Metal artifact.** Dense hardware above the metal cutoff is masked and
-  reported, but streak artifact can still affect nearby thresholding.
-- Not a clinical diagnostic.
+```bash
+uv venv --python 3.12 .venv
+uv pip install -r requirements.txt
+make test                    # 80+ tests
+python scripts/watchdog.py   # independent verification, should be GREEN
 
-## Screenshots
+# then, in three terminals:
+.venv/bin/python -m uvicorn api.main:app --port 8000        # API
+cd app_react && npm install && npm run dev                  # React on :5173
+.venv/bin/python -m app_trame.app --server --port 8081 --timeout 0   # trame
+```
 
-_Add screenshots of the thickness map, region view, and Mode B deviation here._
+Python 3.12 is required — the imaging stack (SimpleITK, VTK, open3d) has no
+wheels for 3.13/3.14 yet.
 
-## Contributing & changelog
+Behind a reverse proxy in production, keep the WebSocket upgrade headers and long
+read timeouts already set in [`deploy/nginx.conf`](deploy/nginx.conf) and allow
+~300 MB uploads. 8 GB RAM is comfortable; volumes and meshes stay in memory
+during compute.
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the parity rule and workflow, and
-[`CHANGELOG.md`](CHANGELOG.md) for the release history. Bug reports and feature
-requests use the templates under `.github/ISSUE_TEMPLATE/`.
+</details>
 
-## License
+<details>
+<summary><b>Limitations (read before trusting a result)</b></summary>
+
+- **One subject describes; it does not prove.** A left/right difference in a
+  single person mixes surgical change with normal dominant-arm asymmetry.
+- **A fused bone needs manual isolation.** If the bone touches its neighbours in
+  the scan (an adducted humerus against the ribcage), auto-isolation can grab the
+  wrong structure — select or clip the region by hand before Mode B.
+- **CT cannot see radiolucent anchors.** Bioabsorbable/PEEK suture anchors don't
+  show up, so the operated side can't always be told from the scan alone.
+- **Metal artifact.** Dense hardware is masked and reported, but streak artifact
+  can still nudge nearby thresholding.
+- Research use only — not a clinical diagnostic.
+
+</details>
+
+## Contributing, changelog, license
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the frontend-parity rule and the
+workflow; [`CHANGELOG.md`](CHANGELOG.md) has the release history; bug reports and
+feature requests use the templates in `.github/ISSUE_TEMPLATE/`.
 
 Apache License 2.0 — © 2026 Ariorad Moniri. See [`LICENSE`](LICENSE) and
 [`NOTICE`](NOTICE).

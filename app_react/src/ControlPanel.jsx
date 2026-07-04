@@ -1,23 +1,35 @@
 // LEFT panel. Sections, top to bottom:
-//   1. Scan / session   — upload a bilateral .zip, show series meta.
-//   2. Side & mode       — Left/Right side selector; in Mode B a sub-toggle
-//                          between per-side thickness and two-side deviation
+//   1. Scan / session   — upload a scan or mesh (all formats), show series meta.
+//   2. Side & mode       — side selector driven purely from session.sides
+//                          (['full'], ['left','right'] or ['mesh']); in Mode B a
+//                          sub-toggle between per-side thickness and deviation
 //                          (with reference/target selectors + mirror toggle).
-//   3. Apply / Recompute — the PRIMARY action; sends current params to the
+//   3. Region            — connected-region selector (from the analyze response).
+//   4. Apply / Recompute — the PRIMARY action; sends current params to the
 //                          compute API so EVERY parameter genuinely applies.
-//   4. Parameters        — the registry-driven panel. Controls come from
+//   5. Manual anchor     — Mode-B nudge/swap for the deviation registration.
+//   6. Export            — formats / DPI / camera pose + download links.
+//   7. Parameters        — the registry-driven panel. Controls come from
 //                          /api/parameters (subset for the active mode); grouped
-//                          by `group` and rendered with <ParameterControl>.
-//                          NOTHING is hardcoded per key.
+//                          by `group`. NOTHING is hardcoded per key.
 
 import ParameterControl from './ParameterControl';
+import ExportPanel from './ExportPanel';
+import ManualAnchor from './ManualAnchor';
+
+const UPLOAD_ACCEPT = '.zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp';
 
 function prettySide(s) {
-  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  if (!s) return s;
+  if (s === 'full') return 'Full';
+  if (s === 'mesh') return 'Mesh';
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export default function ControlPanel({
   session,
+  isMesh,
+  isSingleSided,
   mode,
   controls,
   values,
@@ -34,6 +46,10 @@ export default function ControlPanel({
   onTargetSideChange,
   mirror,
   onMirrorChange,
+  // regions
+  regions,
+  regionLabel,
+  onRegionChange,
   // actions
   onApply,
   onCompare,
@@ -41,6 +57,24 @@ export default function ControlPanel({
   // upload
   onUpload,
   uploading,
+  // manual anchor
+  nudge,
+  onNudgeChange,
+  onSwapSides,
+  hasDeviationResult,
+  isDeviationView,
+  // export
+  formats,
+  onToggleFormat,
+  dpi,
+  onDpiChange,
+  camera,
+  onCameraChange,
+  onExport,
+  exporting,
+  exportFiles,
+  exportError,
+  canExport,
 }) {
   // Group controls by their `group` field, preserving first-seen order.
   const groups = [];
@@ -55,7 +89,7 @@ export default function ControlPanel({
 
   const sides = session?.sides ?? [];
   const meta = session?.meta ?? {};
-  const showDeviation = mode === 'B' && modeBView === 'deviation';
+  const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
 
   return (
@@ -71,6 +105,10 @@ export default function ControlPanel({
             </span>
           </div>
           <div className="meta-row">
+            <span className="meta-key">Format</span>
+            <span className="meta-val">{meta.format || '—'}</span>
+          </div>
+          <div className="meta-row">
             <span className="meta-key">Spacing</span>
             <span className="meta-val">
               {meta.spacing_mm ? meta.spacing_mm.join(' × ') + ' mm' : '—'}
@@ -79,14 +117,18 @@ export default function ControlPanel({
           <div className="meta-row">
             <span className="meta-key">Laterality</span>
             <span className="meta-val">
-              {session?.is_bilateral ? 'Bilateral' : meta.laterality || '—'}
+              {isMesh
+                ? 'Mesh'
+                : session?.is_bilateral
+                  ? 'Bilateral'
+                  : meta.laterality || '—'}
             </span>
           </div>
         </div>
         <label className={`upload-btn${uploading ? ' busy' : ''}`}>
           <input
             type="file"
-            accept=".zip"
+            accept={UPLOAD_ACCEPT}
             disabled={uploading}
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -94,13 +136,22 @@ export default function ControlPanel({
               e.target.value = '';
             }}
           />
-          {uploading ? 'Uploading…' : 'Upload bilateral scan (.zip)'}
+          {uploading ? 'Uploading…' : 'Upload scan or mesh'}
         </label>
+        <p className="panel-hint upload-hint">
+          Volumes (.zip DICOM, .nii, .nii.gz) or meshes (.stl, .ply, .obj, .vtp).
+        </p>
+        {isMesh && (
+          <p className="panel-note">
+            Mesh upload: thickness (Mode A) needs a CT volume, so this session is
+            limited to viewing and Mode-B deviation vs another surface.
+          </p>
+        )}
       </section>
 
       {/* ---- side & mode --------------------------------------------------- */}
       <section className="panel-section">
-        <h2>Side</h2>
+        <h2>{isSingleSided ? 'Scan' : 'Side'}</h2>
         <div className="seg-toggle" role="group" aria-label="Scan side">
           {sides.map((s) => (
             <button
@@ -113,7 +164,7 @@ export default function ControlPanel({
           ))}
         </div>
 
-        {mode === 'B' && (
+        {mode === 'B' && !isMesh && (
           <>
             <h2 className="sub-head">Mode B view</h2>
             <div className="seg-toggle" role="group" aria-label="Mode B view">
@@ -173,6 +224,29 @@ export default function ControlPanel({
         )}
       </section>
 
+      {/* ---- region selector ---------------------------------------------- */}
+      {!showDeviation && regions && regions.length > 0 && (
+        <section className="panel-section">
+          <h2>Region</h2>
+          <label className="ctl ctl-enum">
+            <span className="ctl-label">Connected bone region</span>
+            <select
+              value={regionLabel ?? ''}
+              onChange={(e) => onRegionChange(parseInt(e.target.value, 10))}
+            >
+              {regions.map((r) => (
+                <option key={r.label} value={r.label}>
+                  Region {r.label} — {r.volume_cm3.toFixed(1)} cm³
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="panel-hint">
+            Largest connected component is chosen by default. Recompute to switch.
+          </p>
+        </section>
+      )}
+
       {/* ---- primary action ------------------------------------------------ */}
       <section className="panel-section">
         {showDeviation ? (
@@ -194,10 +268,42 @@ export default function ControlPanel({
           </p>
         )}
         <p className="panel-hint">
-          Recompute re-runs segmentation &amp; thickness with the current
-          parameters, so every control below affects the result.
+          Recompute re-runs the pipeline with the current parameters, so every
+          control below affects the result.
         </p>
       </section>
+
+      {/* ---- manual anchor (Mode B deviation) ------------------------------ */}
+      {showDeviation && (
+        <ManualAnchor
+          transform={nudge}
+          onChange={onNudgeChange}
+          onSwapSides={onSwapSides}
+          onApply={onCompare}
+          computing={computing}
+          hasAutoResult={hasDeviationResult}
+        />
+      )}
+
+      {/* ---- export -------------------------------------------------------- */}
+      <ExportPanel
+        formats={formats}
+        onToggleFormat={onToggleFormat}
+        dpi={dpi}
+        onDpiChange={onDpiChange}
+        camera={camera}
+        onCameraChange={onCameraChange}
+        onExport={onExport}
+        exporting={exporting}
+        files={exportFiles}
+        error={exportError}
+        canExport={canExport}
+        disabledReason={
+          canExport
+            ? undefined
+            : `Compute a ${isDeviationView ? 'deviation' : 'thickness'} result first, then export.`
+        }
+      />
 
       {/* ---- registry-driven parameters ----------------------------------- */}
       <section className="panel-section">

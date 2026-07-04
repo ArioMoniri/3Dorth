@@ -648,3 +648,302 @@ body {
   border-radius: 4px;
   font-size: 13px;
 }
+
+/* ---- header: share + switch-UI ------------------------------------------- */
+.share-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hdr-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hdr-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.hdr-btn.active {
+  background: var(--accent);
+  color: #1f2340;
+  border-color: var(--accent);
+}
+
+.share-wrap {
+  position: relative;
+}
+
+.share-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(20, 24, 48, 0.22);
+  padding: 14px;
+}
+
+.share-popover-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.share-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.share-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #f6f7fc;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.share-copy {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent-2);
+  color: #fff;
+  cursor: pointer;
+}
+
+.share-copy:hover {
+  background: #4a4f92;
+}
+
+.share-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.share-hint code {
+  background: #eceef3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+/* ---- upload hint + mesh note --------------------------------------------- */
+.upload-hint {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.panel-note {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6a4a15;
+  background: #fff5e6;
+  border: 1px solid #f2d9a8;
+  border-radius: 6px;
+}
+
+/* ---- export panel -------------------------------------------------------- */
+.export-panel .export-group {
+  margin-bottom: 14px;
+}
+
+.export-sub {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.format-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.format-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fbfbfd;
+  cursor: pointer;
+  user-select: none;
+}
+
+.format-chip input {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.export-dpi {
+  margin-bottom: 14px;
+}
+
+.camera-grid,
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 10px;
+}
+
+.anchor-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.cam-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cam-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.cam-field input {
+  width: 100%;
+  padding: 6px 7px;
+  font-size: 13px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-btn {
+  margin-top: 4px;
+}
+
+.export-files {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.export-file {
+  display: block;
+  text-align: center;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--accent-2);
+  border: 1px solid var(--accent-2);
+  border-radius: 6px;
+  background: #f6f7fc;
+}
+
+.export-file:hover {
+  background: #eef0fa;
+}
+
+/* ---- manual anchor ------------------------------------------------------- */
+.manual-anchor .anchor-group {
+  margin-bottom: 14px;
+}
+
+.swap-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+
+.anchor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.anchor-actions .apply-btn {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
+.anchor-actions .reset-btn {
+  flex: 0 0 auto;
+}
+
+/* ---- hover tooltip ------------------------------------------------------- */
+.hover-tip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  min-width: 150px;
+  max-width: 230px;
+  background: rgba(31, 35, 64, 0.95);
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 11px;
+  box-shadow: 0 6px 20px rgba(20, 24, 48, 0.3);
+  font-variant-numeric: tabular-nums;
+}
+
+.hover-tip-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.hover-tip-unit {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.hover-tip-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.hover-tip-readout {
+  font-size: 12px;
+  margin-top: 6px;
+  color: #ffd9a8;
+}
+
+.hover-tip-pos {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.72;
+}

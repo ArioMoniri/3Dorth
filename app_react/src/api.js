@@ -45,6 +45,11 @@ async function postJSON(url, body) {
   return data;
 }
 
+// GET /api/config -> { app, react_url, trame_url, public }
+export function fetchConfig() {
+  return getJSON('/api/config');
+}
+
 // GET /api/parameters -> { keys, controls, defaults }
 export function fetchParameters() {
   return getJSON('/api/parameters');
@@ -55,8 +60,10 @@ export function createSession() {
   return postJSON('/api/session');
 }
 
-// POST /api/upload (multipart, field 'file' = .zip) -> same shape as /session
-export async function uploadZip(file) {
+// POST /api/upload (multipart, field 'file') -> same shape as /session.
+// Accepts .zip .nii .nii.gz .stl .ply .obj .vtp. A mesh upload returns
+// sides:['mesh'], is_mesh:true; a single-sided scan returns sides:['full'].
+export async function uploadFile(file) {
   const form = new FormData();
   form.append('file', file);
   const res = await fetch('/api/upload', { method: 'POST', body: form });
@@ -89,12 +96,46 @@ export function analyze(sessionId, { side, regionLabel, params }) {
 }
 
 // POST /api/session/{sid}/compare -> two-side deviation result.
-export function compare(sessionId, { referenceSide, targetSide, params }) {
-  return postJSON(`/api/session/${sessionId}/compare`, {
+// `manualTransform` is an optional 4x4 row-major list (or null) applied on top
+// of the auto registration to manually nudge the target onto the reference.
+export function compare(
+  sessionId,
+  { referenceSide, targetSide, params, manualTransform },
+) {
+  const body = {
     reference_side: referenceSide,
     target_side: targetSide,
     params,
-  });
+  };
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/compare`, body);
+}
+
+// POST /api/session/{sid}/export -> { files:{fmt:url}, mode, scalar }.
+// mode 'A' exports a single side's thickness map; mode 'B' a deviation map.
+export function exportResult(
+  sessionId,
+  {
+    mode,
+    side,
+    referenceSide,
+    targetSide,
+    regionLabel,
+    params,
+    formats,
+    dpi,
+    camera,
+    manualTransform,
+  },
+) {
+  const body = { mode, params, formats, dpi };
+  if (side != null) body.side = side;
+  if (referenceSide != null) body.reference_side = referenceSide;
+  if (targetSide != null) body.target_side = targetSide;
+  if (regionLabel != null) body.region_label = regionLabel;
+  if (camera) body.camera = camera;
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/export`, body);
 }
 
 // Geometry .vtp files are served at the geometry_url returned by analyze/compare.

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="200" viewBox="0 0 880 200" role="img" aria-label="3Dorth — cortical bone mapping from CT">
+  <!-- Animated with SMIL so it plays on GitHub (GitHub renders animated SVG/GIF, not Lottie/Rive JS).
+       A Lottie or Rive version of this header can be embedded on a hosted docs site instead. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e1a24"/>
+      <stop offset="1" stop-color="#132735"/>
+    </linearGradient>
+    <!-- Guo et al. discrete green->red cortical-thickness scale (thin -> thick) -->
+    <linearGradient id="thick" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0.00" stop-color="#1a7d3a"/><stop offset="0.14" stop-color="#1a7d3a"/>
+      <stop offset="0.14" stop-color="#57b544"/><stop offset="0.28" stop-color="#57b544"/>
+      <stop offset="0.28" stop-color="#a7d34e"/><stop offset="0.42" stop-color="#a7d34e"/>
+      <stop offset="0.42" stop-color="#eae52a"/><stop offset="0.56" stop-color="#eae52a"/>
+      <stop offset="0.56" stop-color="#f2b21f"/><stop offset="0.70" stop-color="#f2b21f"/>
+      <stop offset="0.70" stop-color="#ef7d1a"/><stop offset="0.84" stop-color="#ef7d1a"/>
+      <stop offset="0.84" stop-color="#e31d1d"/><stop offset="1.00" stop-color="#e31d1d"/>
+    </linearGradient>
+    <clipPath id="boneClip">
+      <!-- proximal-humerus silhouette: rounded head at top, tapering shaft -->
+      <path d="M150 34 C176 30 200 46 204 74 C206 96 194 112 176 122
+               L172 150 C171 168 165 176 156 176 C147 176 141 168 140 150
+               L136 120 C120 110 110 92 116 70 C122 46 132 38 150 34 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="880" height="200" rx="14" fill="url(#bg)"/>
+
+  <!-- Bone silhouette, filled by a sweeping thickness gradient, gently rocking -->
+  <g transform="translate(0,0)">
+    <animateTransform attributeName="transform" type="rotate"
+      values="-2 160 105; 2 160 105; -2 160 105" dur="7s" repeatCount="indefinite"/>
+    <g clip-path="url(#boneClip)">
+      <rect x="100" y="20" width="120" height="170" fill="url(#thick)"/>
+      <!-- vertical shimmer sweeping down the bone, echoing a live thickness recompute -->
+      <rect x="100" y="20" width="120" height="42" fill="#ffffff" opacity="0.16">
+        <animate attributeName="y" values="20;150;20" dur="4s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <path d="M150 34 C176 30 200 46 204 74 C206 96 194 112 176 122
+             L172 150 C171 168 165 176 156 176 C147 176 141 168 140 150
+             L136 120 C120 110 110 92 116 70 C122 46 132 38 150 34 Z"
+          fill="none" stroke="#dce8ef" stroke-width="1.4" opacity="0.55"/>
+  </g>
+
+  <!-- Discrete colorbar that fills one step at a time -->
+  <g transform="translate(792,40)" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="26" y="-14" fill="#9fb3c0" font-size="11" text-anchor="end">mm</text>
+    <g>
+      <rect x="0" y="0"   width="26" height="17" fill="#e31d1d"><animate attributeName="opacity" values="0.15;1;1;0.15" keyTimes="0;0.12;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="17"  width="26" height="17" fill="#ef7d1a"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.12;0.24;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="34"  width="26" height="17" fill="#f2b21f"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.24;0.36;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="51"  width="26" height="17" fill="#eae52a"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.36;0.48;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="68"  width="26" height="17" fill="#a7d34e"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.48;0.60;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="85"  width="26" height="17" fill="#57b544"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.60;0.72;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+      <rect x="0" y="102" width="26" height="17" fill="#1a7d3a"><animate attributeName="opacity" values="0.15;0.15;1;1;0.15" keyTimes="0;0.72;0.84;0.88;1" dur="3.5s" repeatCount="indefinite"/></rect>
+    </g>
+    <text x="34" y="9"   fill="#c9d6df" font-size="10">6.52</text>
+    <text x="34" y="128" fill="#c9d6df" font-size="10">0.15</text>
+  </g>
+
+  <!-- Wordmark -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="300" y="86" fill="#f4f7f9" font-size="46" font-weight="700">3Dorth</text>
+    <text x="302" y="118" fill="#8fd0a2" font-size="17" font-weight="600">Cortical bone mapping from CT</text>
+    <text x="302" y="144" fill="#93a7b4" font-size="13">Per-surface wall thickness · left/right deviation · Guo et al. 2022</text>
+  </g>
+</svg>
