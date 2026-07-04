@@ -9,6 +9,11 @@
 # below). Faster (coarser) compute + more sessions, e.g.:
 #   THREEDORTH_MAX_WORK_VOXELS=30000000 THREEDORTH_MAX_ISO_VOXELS=12000000 \
 #   THREEDORTH_MAX_SESSIONS=8 docker compose --profile all up -d --build
+#
+# Host ports + bind address are configurable (for servers where a port is taken or
+# for tunnel-only access): set BIND_ADDR=127.0.0.1 to expose ONLY on localhost (the
+# Cloudflare tunnel is then the sole way in), and API_HOST_PORT/TRAME_HOST_PORT/
+# REACT_HOST_PORT to move a clashing host port. `./serve-public.sh` sets these for you.
 x-threedorth-env: &threedorth-env
   THREEDORTH_MAX_SESSIONS: ${THREEDORTH_MAX_SESSIONS:-6}
   THREEDORTH_COMPUTE_CONCURRENCY: ${THREEDORTH_COMPUTE_CONCURRENCY:-1}
@@ -27,7 +32,7 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment: *threedorth-env
     ports:
-      - "8000:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${API_HOST_PORT:-8000}:8000"
     volumes:
       - ./outputs:/app/outputs
       - ./data:/app/data
@@ -41,7 +46,7 @@ services:
     command: xvfb-run -a python -m app_trame.app --server --host 0.0.0.0 --port 8080 --timeout 0
     environment: *threedorth-env
     ports:
-      - "8081:8080"
+      - "${BIND_ADDR:-0.0.0.0}:${TRAME_HOST_PORT:-8081}:8080"
     profiles: ["trame", "all"]
     restart: unless-stopped
 
@@ -50,7 +55,7 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.react
     ports:
-      - "8088:80"
+      - "${BIND_ADDR:-0.0.0.0}:${REACT_HOST_PORT:-8088}:80"
     depends_on:
       - api
     profiles: ["react", "all"]

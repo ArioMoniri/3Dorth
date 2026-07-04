@@ -105,7 +105,16 @@ No patient data is in the image — upload a CT `.zip` in the UI to start.
 `./run.sh react` or `./run.sh trame` bring up just one frontend; `./run.sh down`
 stops everything.
 
-**Share it temporarily.** With the servers running, `./scripts/share.sh` opens
+**Public server, one command.** On a firewalled Ubuntu box, `./serve-public.sh`
+auto-tunes the compute budget to the machine (cores/RAM), builds and starts the
+stack, waits until the API is healthy, then opens a resilient Cloudflare tunnel and
+prints the public link — **outbound-only, so no inbound ports need opening, and the
+link exposes only the app (never SSH/your shell)**. Move a clashing host port with
+`REACT_HOST_PORT=9090 ./serve-public.sh 9090`, expose only via the tunnel with
+`BIND_ADDR=127.0.0.1 ./serve-public.sh`, or use a GPU with `THREEDORTH_GPU=1`. See
+the current link anytime with `cat outputs/public_urls.json`.
+
+**Share an already-running stack.** `./scripts/share.sh` opens
 public Cloudflare tunnels to both UIs and writes the URLs so the in-app Share
 panel picks them up. It stays running and **keeps the tunnels alive across
 laptop sleep/wake and network drops** — on a wake it restarts them and rewrites
