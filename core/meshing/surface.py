@@ -124,6 +124,42 @@ def _resample_point_scalars(src: pv.PolyData, dst: pv.PolyData) -> None:
         dst.point_data[k] = vals[idx]
 
 
+def smooth_point_scalar_display(mesh: pv.PolyData, name: str, iters: int, lam: float = 0.5) -> str:
+    """DISPLAY-ONLY Laplacian smoothing of a per-vertex scalar.
+
+    Adds a smoothed copy of point-scalar ``name`` as ``{name}__display`` and
+    returns its name (or the original ``name`` when ``iters<=0`` / not present).
+    The RAW array is never modified, so every statistic and hover read-out stays
+    on the computed values — only the colour that a renderer maps is smoothed.
+    This mirrors the client-side smoothing in the React viewport so exports and
+    both frontends match the same ``color_smooth_iters`` setting.
+    """
+    if not iters or int(iters) <= 0 or name not in mesh.point_data:
+        return name
+    n = int(mesh.n_points)
+    if n == 0:
+        return name
+    tri = np.asarray(mesh.faces).reshape(-1, 4)
+    if tri.size == 0 or not np.all(tri[:, 0] == 3):
+        # only defined for a pure-triangle mesh (mask_to_mesh always triangulates)
+        return name
+    tri = tri[:, 1:]
+    from scipy.sparse import coo_matrix
+
+    r = np.concatenate([tri[:, 0], tri[:, 1], tri[:, 2], tri[:, 1], tri[:, 2], tri[:, 0]])
+    c = np.concatenate([tri[:, 1], tri[:, 2], tri[:, 0], tri[:, 0], tri[:, 1], tri[:, 2]])
+    A = coo_matrix((np.ones(r.shape[0], dtype=np.float32), (r, c)), shape=(n, n)).tocsr()
+    A = A.minimum(1.0)  # dedupe: each neighbour counts once
+    deg = np.asarray(A.sum(axis=1)).ravel()
+    deg[deg == 0] = 1.0
+    vals = np.asarray(mesh.point_data[name], dtype=np.float64).copy()
+    for _ in range(min(int(iters), 20)):
+        vals = vals + lam * ((A @ vals) / deg - vals)
+    disp = f"{name}__display"
+    mesh.point_data[disp] = vals.astype(np.float32)
+    return disp
+
+
 def _make_watertight(mesh: pv.PolyData, hole_size: float) -> pv.PolyData:
     """Repair to a closed manifold: vtk fill_holes + clean, then open3d
     non-manifold / duplicate removal. Best-effort — never raises on a mesh that

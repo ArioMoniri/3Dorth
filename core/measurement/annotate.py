@@ -70,33 +70,43 @@ def _as_opts(spec) -> dict:
     return {}
 
 
-def _auto_base_span(mesh: pv.PolyData, axis: str):
-    """(lo, hi) along ``axis`` for the base band, and the base-line coordinate.
+def _auto_base_span(
+    mesh: pv.PolyData,
+    axis: str,
+    line_frac: float = _BASE_LINE_FRAC,
+    lo_frac: float = 0.0,
+    hi_frac: float = 0.5,
+):
+    """(lo, hi) along ``axis`` for the base band, plus the base-line + bracket coords.
 
-    ``lo``/``hi`` bound the proximal (base) portion of the bone — the surgical-
-    neck / lesser-tuberosity region — as the bottom half of the axial extent.
+    ``lo``/``hi`` are the axial extent. ``line_coord`` = the sampling-line height
+    (``line_frac`` up from the base). ``band_lo``/``band_hi`` bound the height
+    bracket (``lo_frac``/``hi_frac`` of the extent) — by default the proximal half
+    where the surgical-neck / lesser-tuberosity sits. All fractions are user-
+    adjustable (registry) so the overlays can be re-placed without recompute.
     """
     ai = _AXIS[axis]
     pts = np.asarray(mesh.points, dtype=np.float64)
     lo = float(pts[:, ai].min())
     hi = float(pts[:, ai].max())
-    line_coord = lo + _BASE_LINE_FRAC * (hi - lo)
-    # base band = the proximal half, where the neck/tuberosity sits.
-    band_hi = lo + 0.5 * (hi - lo)
-    return lo, hi, line_coord, band_hi
+    span = hi - lo
+    line_coord = lo + float(line_frac) * span
+    band_lo = lo + float(lo_frac) * span
+    band_hi = lo + float(hi_frac) * span
+    return lo, hi, line_coord, band_lo, band_hi
 
 
-def _auto_line_endpoints(mesh: pv.PolyData, axis: str):
+def _auto_line_endpoints(mesh: pv.PolyData, axis: str, line_frac: float = _BASE_LINE_FRAC):
     """Endpoints of an auto-placed sampling line across the base of the bone.
 
-    The line runs along the widest cross-axis at the surgical-neck/lesser-
-    tuberosity level (``_BASE_LINE_FRAC`` up the axial extent), spanning the
-    bone's extent on that axis so its samples cross the cortical wall.
+    The line runs along the widest cross-axis at the sampling-line level
+    (``line_frac`` up the axial extent), spanning the bone's extent on that axis
+    so its samples cross the cortical wall.
     """
     ai = _AXIS[axis]
     others = [i for i in (0, 1, 2) if i != ai]
     pts = np.asarray(mesh.points, dtype=np.float64)
-    _lo, _hi, line_coord, _band_hi = _auto_base_span(mesh, axis)
+    _lo, _hi, line_coord, _band_lo, _band_hi = _auto_base_span(mesh, axis, line_frac)
 
     # pick the wider of the two cross-axes to span (more informative section).
     spans = [(float(pts[:, o].max() - pts[:, o].min()), o) for o in others]
@@ -143,6 +153,10 @@ def plan_annotations(
         return out
 
     axis_default = getattr(params, "height_axis", "z")
+    # Adjustable auto-placement fractions (registry; export-overlay placement only).
+    line_frac = float(getattr(params, "measure_line_frac", _BASE_LINE_FRAC))
+    lo_frac = float(getattr(params, "measure_bracket_lo_frac", 0.0))
+    hi_frac = float(getattr(params, "measure_bracket_hi_frac", 0.5))
     # a modest marker size relative to the mesh so triangles read at any scale.
     if marker_size is None:
         diag = float(np.linalg.norm(np.ptp(np.asarray(mesh.bounds).reshape(3, 2), axis=1)))
@@ -158,7 +172,7 @@ def plan_annotations(
             p0 = tuple(opts["p0"]) if opts.get("p0") is not None else None
             p1 = tuple(opts["p1"]) if opts.get("p1") is not None else None
             if p0 is None or p1 is None:
-                ap0, ap1 = _auto_line_endpoints(mesh, axis)
+                ap0, ap1 = _auto_line_endpoints(mesh, axis, line_frac)
                 p0 = p0 or ap0
                 p1 = p1 or ap1
             n = int(opts.get("n", getattr(params, "measure_line_points", 3)))
@@ -183,9 +197,11 @@ def plan_annotations(
             lower = opts.get("lower")
             upper = opts.get("upper")
             if lower is None and upper is None:
-                # auto: bracket the proximal (base) band like Fig-2 panel B.
-                lo, _hi, _line, band_hi = _auto_base_span(mesh, axis)
-                lower, upper = lo, band_hi
+                # auto: bracket the (adjustable) base band like Fig-2 panel B.
+                _lo, _hi, _line, band_lo, band_hi = _auto_base_span(
+                    mesh, axis, line_frac, lo_frac, hi_frac
+                )
+                lower, upper = band_lo, band_hi
             hm = measure_height(mesh, axis=axis,
                                 lower=None if lower is None else float(lower),
                                 upper=None if upper is None else float(upper))

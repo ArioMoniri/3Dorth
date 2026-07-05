@@ -146,6 +146,15 @@ REGISTRY: list[ParamSpec] = [
         help="Number of discrete legend bands. Paper Fig. 2 uses 7; raise toward 64 "
              "for a smooth, near-continuous gradient.",
     ),
+    ParamSpec(
+        key="color_smooth_iters", label="Colour smoothing", group="Coloring",
+        control=ControlType.INT, default=0, minimum=0, maximum=20, step=1,
+        help="Laplacian smoothing of the DISPLAYED thickness/deviation colour "
+             "across the surface — a smoother green→red gradient like the paper "
+             "Fig. 2. Display-only: the computed thickness and every statistic "
+             "stay on the raw per-vertex values; only the rendered colour is "
+             "smoothed (0 = sharp per-vertex colour).",
+    ),
 
     # ---- Measurement tools (Mode A) ----------------------------------------
     ParamSpec(
@@ -157,6 +166,30 @@ REGISTRY: list[ParamSpec] = [
         key="height_axis", label="Height/extent axis", group="Measurement",
         control=ControlType.ENUM, default="z", choices=AXES, mode=Mode.A,
         help="Axis along which the height/extent bracket is measured (Z = up).",
+    ),
+    ParamSpec(
+        key="measure_line_frac", label="Sampling-line height", group="Measurement",
+        control=ControlType.FLOAT, default=0.15, minimum=0.0, maximum=1.0, step=0.01,
+        mode=Mode.A,
+        help="Fractional height of the auto-placed Fig-2 cortical-thickness sampling "
+             "line along the height axis (0 = proximal base, 1 = top). 0.15 ≈ the "
+             "surgical-neck / lesser-tuberosity base. Adjusts export-overlay "
+             "PLACEMENT only — the sampled thickness is always read off the computed "
+             "map, never fabricated.",
+    ),
+    ParamSpec(
+        key="measure_bracket_lo_frac", label="Height bracket — lower", group="Measurement",
+        control=ControlType.FLOAT, default=0.0, minimum=0.0, maximum=1.0, step=0.01,
+        mode=Mode.A,
+        help="Lower end of the Fig-2 panel-B height bracket, as a fraction of the "
+             "axial extent (0 = base). Export-overlay placement only.",
+    ),
+    ParamSpec(
+        key="measure_bracket_hi_frac", label="Height bracket — upper", group="Measurement",
+        control=ControlType.FLOAT, default=0.5, minimum=0.0, maximum=1.0, step=0.01,
+        mode=Mode.A,
+        help="Upper end of the Fig-2 panel-B height bracket, as a fraction of the "
+             "axial extent (1 = top). Export-overlay placement only.",
     ),
 
     # ---- Registration (Mode B) ---------------------------------------------
@@ -295,6 +328,12 @@ DISPLAY_ONLY_KEYS: set[str] = {
     "mode_a_range_max", "mode_a_colorbar_steps",
     "mode_b_colormap", "mode_b_center", "mode_b_range_abs", "mode_b_colorbar_steps",
     "standardized_view",
+    # colour smoothing is applied at render time (client-side in React, server
+    # re-render in trame); it never re-runs the pipeline or changes any statistic.
+    "color_smooth_iters",
+    # Fig-2 overlay PLACEMENT only affects the exported annotated figure, not the
+    # pipeline or the live map — so no recompute is needed when these change.
+    "measure_line_frac", "measure_bracket_lo_frac", "measure_bracket_hi_frac",
 }
 
 

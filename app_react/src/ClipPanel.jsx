@@ -70,6 +70,7 @@ export default function ClipPanel({
   onToggle,
   onBoxChange,
   onReset,
+  canPickIsolate,
   visibleCount,
   totalCount,
   visiblePct,
@@ -106,6 +107,12 @@ export default function ClipPanel({
 
       {enabled && (
         <>
+          {canPickIsolate && (
+            <p className="panel-hint clip-hint clip-hint-pick">
+              Tip: <strong>click the part you want</strong> on the 3D surface to
+              re-centre the box on it — then fine-tune with the sliders.
+            </p>
+          )}
           <p className="panel-hint clip-hint">
             Shrink the box to isolate a sub-part (e.g. only the proximal
             humerus). Everything outside the box is hidden; statistics for the

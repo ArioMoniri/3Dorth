@@ -45,11 +45,18 @@ def render_thickness_figure(
     cmap_name = params.mode_a_colormap
     reverse = params.mode_a_colormap_reverse
 
+    # DISPLAY-ONLY colour smoothing so the export matches the on-screen render;
+    # colours off a smoothed copy, statistics stay on the raw scalar.
+    from core.meshing.surface import smooth_point_scalar_display
+    color_scalar = smooth_point_scalar_display(
+        mesh, scalar, int(getattr(params, "color_smooth_iters", 0) or 0)
+    )
+
     # 1) render the coloured bone offscreen, no VTK legend, transparent bg
     pv.OFF_SCREEN = True
     pl = pv.Plotter(off_screen=True, window_size=window)
     pl.set_background("white")
-    pl.add_mesh(mesh, scalars=scalar, cmap=get_cmap(cmap_name, reverse),
+    pl.add_mesh(mesh, scalars=color_scalar, cmap=get_cmap(cmap_name, reverse),
                 n_colors=steps, clim=[vmin, vmax], smooth_shading=True,
                 show_scalar_bar=False)
     pl.add_axes(line_width=3)

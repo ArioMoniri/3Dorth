@@ -126,6 +126,11 @@ export default function App() {
   // The current oblique plane { origin:[x,y,z], normal:[x,y,z], sizeMm } pushed
   // up by ObliqueView so the 3D Viewport can draw the matching translucent cut.
   const [obliquePlane, setObliquePlane] = useState(null);
+  // Grab-to-slide: the 3D Viewport reports incremental drags of the cutting plane
+  // (mm along its normal); ObliqueView consumes each (seq-keyed) nudge to move the
+  // plane, so dragging the blue plane == the Position slider.
+  const [planeNudge, setPlaneNudge] = useState(null);
+  const planeNudgeSeqRef = useRef(0);
 
   // Compute state + last results.
   const [computing, setComputing] = useState(false);
@@ -445,9 +450,19 @@ export default function App() {
   // that crosshair into the MPR, place the 3D marker, and reveal the images.
   const pickSeqRef = useRef(0);
   async function onSurfacePick(worldXyz) {
-    if (!session || !mprSide) return;
-    // Show the marker immediately at the exact picked point (no round-trip lag).
+    // Clip / isolate: when the clip box is on (single side only), clicking the
+    // surface RE-CENTRES the box on the picked part so you can "click the bit you
+    // want" instead of nudging six sliders. Keeps the box's current size if you
+    // already shrank it; otherwise seeds a sensible sub-region around the pick.
+    // Done FIRST so it works even for mesh uploads (no MPR side) — the guard below
+    // only gates the MPR crosshair round-trip, not the clip.
+    if (clipEnabled && !isBoth && meshBounds) {
+      const nextBox = clipBoxFromPick(worldXyz);
+      if (nextBox) setClipBox(nextBox);
+    }
+    // Show the marker at the exact picked point (no round-trip lag).
     setMarker({ x: worldXyz[0], y: worldXyz[1], z: worldXyz[2] });
+    if (!session || !mprSide) return;
     try {
       const res = await pickToSlices(session.session_id, {
         side: mprSide,
@@ -767,6 +782,43 @@ export default function App() {
     setClipBox({ xmin, xmax, ymin, ymax, zmin, zmax });
   }
 
+  // Build a clip box centred on a picked world point. Preserves the current box
+  // SIZE per axis if the user already shrank it (so "click to reposition" keeps
+  // the isolation size); otherwise seeds a default sub-region (40% of each axis
+  // extent) around the pick. Always clamped to the real mesh bounds.
+  function clipBoxFromPick(worldXyz) {
+    if (!meshBounds) return null;
+    const [xmin, xmax, ymin, ymax, zmin, zmax] = meshBounds;
+    const lo = [xmin, ymin, zmin];
+    const hi = [xmax, ymax, zmax];
+    const DEFAULT_FRAC = 0.4;
+    const cur = clipBox;
+    // Is the current box effectively "the whole mesh" (nothing isolated yet)?
+    const eps = 1e-3;
+    const full =
+      !cur ||
+      (cur.xmin <= xmin + eps && cur.xmax >= xmax - eps &&
+        cur.ymin <= ymin + eps && cur.ymax >= ymax - eps &&
+        cur.zmin <= zmin + eps && cur.zmax >= zmax - eps);
+    const curHalf = cur
+      ? [(cur.xmax - cur.xmin) / 2, (cur.ymax - cur.ymin) / 2, (cur.zmax - cur.zmin) / 2]
+      : [0, 0, 0];
+    const out = {};
+    const keys = ['x', 'y', 'z'];
+    for (let a = 0; a < 3; a += 1) {
+      const ext = hi[a] - lo[a];
+      const half = full ? (ext * DEFAULT_FRAC) / 2 : curHalf[a];
+      let cmin = worldXyz[a] - half;
+      let cmax = worldXyz[a] + half;
+      // Clamp to bounds, keeping the box on-mesh.
+      if (cmin < lo[a]) { cmin = lo[a]; cmax = Math.min(hi[a], lo[a] + 2 * half); }
+      if (cmax > hi[a]) { cmax = hi[a]; cmin = Math.max(lo[a], hi[a] - 2 * half); }
+      out[`${keys[a]}min`] = cmin;
+      out[`${keys[a]}max`] = cmax;
+    }
+    return out;
+  }
+
   const totalVertexCount = scalarValues ? scalarValues.length : null;
   const visibleVertexCount = useMemo(() => {
     if (!visibleMask) return null;
@@ -1077,6 +1129,12 @@ export default function App() {
             clipBox={clipEnabled && !isBoth ? clipBox : null}
             onBounds={onViewportBounds}
             onVisibleMask={setVisibleMask}
+            colorSmoothIters={Number(values?.color_smooth_iters) || 0}
+            onPlaneDrag={
+              centerView === 'oblique'
+                ? (d) => setPlaneNudge({ d, seq: (planeNudgeSeqRef.current += 1) })
+                : undefined
+            }
           />
 
           {displayGeometry && (
@@ -1090,17 +1148,20 @@ export default function App() {
 
           {clipEnabled && displayGeometry && (
             <div className="left-overlay">
-              <ClipPanel
-                bounds={meshBounds}
-                box={clipBox}
-                enabled={clipEnabled}
-                onToggle={onToggleClip}
-                onBoxChange={setClipBox}
-                onReset={onResetClip}
-                visibleCount={visibleVertexCount}
-                totalCount={totalVertexCount}
-                visiblePct={visiblePct}
-              />
+              <DraggablePanel className="dp-clip">
+                <ClipPanel
+                  bounds={meshBounds}
+                  box={clipBox}
+                  enabled={clipEnabled}
+                  onToggle={onToggleClip}
+                  onBoxChange={setClipBox}
+                  onReset={onResetClip}
+                  canPickIsolate={!isBoth}
+                  visibleCount={visibleVertexCount}
+                  totalCount={totalVertexCount}
+                  visiblePct={visiblePct}
+                />
+              </DraggablePanel>
             </div>
           )}
 
@@ -1247,6 +1308,7 @@ export default function App() {
                   sessionId={session.session_id}
                   side={mprSide}
                   pickedWorld={marker}
+                  planeNudge={planeNudge}
                   onPlaneChange={setObliquePlane}
                   onPixelPick={onObliquePixelPick}
                   // Two-box matched compare ONLY when actually comparing (Mode B /

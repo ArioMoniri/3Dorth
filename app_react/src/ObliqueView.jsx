@@ -35,6 +35,7 @@ import {
   obliquePixelToWorld,
 } from './api';
 import MeasureOverlay, { exportWithMeasures } from './MeasureOverlay';
+import DraggablePanel from './DraggablePanel';
 
 const DEBOUNCE_MS = 120;
 const DEG = Math.PI / 180;
@@ -73,6 +74,7 @@ export default function ObliqueView({
   sessionId,
   side,
   pickedWorld,
+  planeNudge,
   onPlaneChange,
   onPixelPick,
   compareMode = false,
@@ -87,6 +89,7 @@ export default function ObliqueView({
   const [azimuth, setAzimuth] = useState(0); // degrees, around Z
   const [elevation, setElevation] = useState(0); // degrees, from XY plane
   const [offsetMm, setOffsetMm] = useState(0); // slides origin along the normal
+  const [sizeScale, setSizeScale] = useState(1); // 0.3–2× on the auto plane size
   const [center, setCenter] = useState(null); // [x,y,z] mm — base plane centre
   const [measureMode, setMeasureMode] = useState(false); // on-image measurement tools
   const [measures, setMeasures] = useState([]);
@@ -139,6 +142,7 @@ export default function ObliqueView({
         setOffsetMm(0);
         setAzimuth(0);
         setElevation(0);
+        setSizeScale(1);
       })
       .catch((e) => {
         if (!cancelled) setInfoError(String(e?.message || e));
@@ -148,12 +152,15 @@ export default function ObliqueView({
     };
   }, [sessionId, infoSide]);
 
-  const sizeMm = useMemo(() => {
+  const autoSizeMm = useMemo(() => {
     if (!info) return 220;
     const { x, y, z } = info.extent_mm;
     const diag = Math.hypot(x[1] - x[0], y[1] - y[0], z[1] - z[0]);
     return Math.max(60, Math.min(600, diag * 0.6));
   }, [info]);
+  // User-adjustable plane size: a scale (0.3–2×) on the auto size so it adapts
+  // to any volume. The rendered blue plane + the sampled reformat both use this.
+  const sizeMm = Math.round(autoSizeMm * sizeScale);
 
   const normal = useMemo(() => normalFromAngles(azimuth, elevation), [azimuth, elevation]);
 
@@ -174,6 +181,18 @@ export default function ObliqueView({
     onPlaneChange?.({ origin, normal, sizeMm });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [origin?.[0], origin?.[1], origin?.[2], normal[0], normal[1], normal[2], sizeMm]);
+
+  // Grab-to-slide: apply each incremental plane drag from the 3D Viewport to the
+  // along-normal offset (clamped to the volume), so dragging the blue plane moves
+  // it exactly like the Position slider. Seq-keyed so each nudge applies once.
+  const lastNudgeSeqRef = useRef(0);
+  useEffect(() => {
+    if (!planeNudge || !info || planeNudge.seq === lastNudgeSeqRef.current) return;
+    lastNudgeSeqRef.current = planeNudge.seq;
+    const { x, y, z } = info.extent_mm;
+    const maxOff = Math.hypot(x[1] - x[0], y[1] - y[0], z[1] - z[0]) / 2;
+    setOffsetMm((o) => Math.max(-maxOff, Math.min(maxOff, o + planeNudge.d)));
+  }, [planeNudge, info]);
 
   // ---- debounced fetch of the reformat whenever the plane moves ------------
   useEffect(() => {
@@ -410,6 +429,7 @@ export default function ObliqueView({
   const maxOffset = Math.hypot(x[1] - x[0], y[1] - y[0], z[1] - z[0]) / 2;
 
   const controlsPanel = (
+    <DraggablePanel className="dp-oblique-controls">
     <div className="oblique-controls">
       <div className="oblique-controls-title">Arbitrary cutting plane</div>
         <label className="oblique-slider-row">
@@ -448,6 +468,18 @@ export default function ObliqueView({
           />
           <span className="oblique-slider-val">{offsetMm.toFixed(1)} mm</span>
         </label>
+        <label className="oblique-slider-row">
+          <span>Plane size</span>
+          <input
+            type="range"
+            min={0.3}
+            max={2}
+            step={0.05}
+            value={sizeScale}
+            onChange={(e) => setSizeScale(Number(e.target.value))}
+          />
+          <span className="oblique-slider-val">{sizeMm} mm</span>
+        </label>
         <div className="oblique-btn-row">
           <button
             type="button"
@@ -472,6 +504,7 @@ export default function ObliqueView({
           origin (mm) {origin ? fmt3(origin) : '—'}
         </div>
     </div>
+    </DraggablePanel>
   );
 
   if (compareMode) {

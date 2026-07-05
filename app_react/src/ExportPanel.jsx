@@ -88,10 +88,11 @@ export default function ExportPanel({
             <span>Height bracket</span>
           </label>
           <p className="panel-hint">
-            Auto-placed at the surgical-neck / lesser-tuberosity base. Sampled
-            thickness is read off the computed map (never fabricated); the
-            annotated figure is descriptive / single-subject. Applies to raster
-            formats (PNG/TIFF/JPG) and the DICOM SC.
+            Auto-placed at the surgical-neck / lesser-tuberosity base — adjust the
+            placement under <strong>Parameters → Measurement</strong> (sampling-line
+            height, height-bracket lower/upper). Sampled thickness is read off the
+            computed map (never fabricated); the annotated figure is descriptive /
+            single-subject. Applies to raster formats (PNG/TIFF/JPG) and the DICOM SC.
           </p>
         </div>
       )}

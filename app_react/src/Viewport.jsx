@@ -29,6 +29,7 @@ import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
 import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
 import vtkPlaneSource from '@kitware/vtk.js/Filters/Sources/PlaneSource';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
+import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 
 import { fetchGeometryArrayBuffer } from './api';
 import { buildDiscreteLUT } from './colors';
@@ -37,6 +38,77 @@ function parseVtp(arrayBuffer) {
   const reader = vtkXMLPolyDataReader.newInstance();
   reader.parseAsArrayBuffer(arrayBuffer);
   return reader.getOutputData(0);
+}
+
+// ---- DISPLAY-ONLY colour smoothing --------------------------------------- //
+// Build the one-ring vertex adjacency (neighbour index lists) from the triangle
+// connectivity, so a scalar can be Laplacian-smoothed along the surface. Cached
+// per-geometry on the context (topology is fixed until the mesh URL changes).
+function buildVertexAdjacency(polydata) {
+  const polys = polydata.getPolys()?.getData();
+  const nPts = polydata.getNumberOfPoints();
+  const nbr = Array.from({ length: nPts }, () => new Set());
+  if (!polys) return nbr.map((s) => [...s]);
+  let i = 0;
+  while (i < polys.length) {
+    const n = polys[i];
+    for (let a = 1; a <= n; a += 1) {
+      for (let b = a + 1; b <= n; b += 1) {
+        const va = polys[i + a];
+        const vb = polys[i + b];
+        nbr[va].add(vb);
+        nbr[vb].add(va);
+      }
+    }
+    i += n + 1;
+  }
+  return nbr.map((s) => [...s]);
+}
+
+// Laplacian smoothing of a per-vertex scalar over the mesh graph. Returns a NEW
+// Float32Array — the source array (the honest, computed thickness used for hover
+// and every statistic) is never modified. Purely a render-side cosmetic pass.
+function laplacianSmoothScalar(values, adjacency, iters, lambda = 0.5) {
+  let cur = Float32Array.from(values);
+  const n = cur.length;
+  for (let it = 0; it < iters; it += 1) {
+    const next = new Float32Array(n);
+    for (let v = 0; v < n; v += 1) {
+      const nb = adjacency[v];
+      if (!nb || nb.length === 0) { next[v] = cur[v]; continue; }
+      let sum = 0;
+      for (let k = 0; k < nb.length; k += 1) sum += cur[nb[k]];
+      const avg = sum / nb.length;
+      next[v] = cur[v] + lambda * (avg - cur[v]);
+    }
+    cur = next;
+  }
+  return cur;
+}
+
+// Add/replace a point-data array (used to hold the smoothed DISPLAY scalar so the
+// mapper colours by it while hover/stats still read the raw array by its name).
+function upsertPointArray(polydata, name, typedValues) {
+  const pd = polydata.getPointData();
+  const existing = pd.getArrayByName(name);
+  if (existing) {
+    existing.setData(typedValues);
+  } else {
+    pd.addArray(vtkDataArray.newInstance({ name, numberOfComponents: 1, values: typedValues }));
+  }
+}
+
+// Choose the array the mapper should colour by: the smoothed display copy when
+// smoothing is on, else the raw scalar. Recomputes the display copy as needed.
+function colorArrayForDisplay(ctx, polydata, scalarName, iters, adjKey = 'adjacency') {
+  if (!iters || iters <= 0) return scalarName;
+  const raw = polydata.getPointData().getArrayByName(scalarName);
+  if (!raw) return scalarName;
+  if (!ctx[adjKey]) ctx[adjKey] = buildVertexAdjacency(polydata);
+  const smoothed = laplacianSmoothScalar(raw.getData(), ctx[adjKey], Math.min(iters, 20));
+  const displayName = `${scalarName}__display`;
+  upsertPointArray(polydata, displayName, smoothed);
+  return displayName;
 }
 
 // Find the point id of the cell vertex closest to the pick hit. The picker
@@ -155,6 +227,8 @@ export default function Viewport({
   clipBox,
   onBounds,
   onVisibleMask,
+  colorSmoothIters = 0,
+  onPlaneDrag,
 }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
@@ -162,6 +236,8 @@ export default function Viewport({
   onHoverRef.current = onHover;
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
+  const onPlaneDragRef = useRef(onPlaneDrag);
+  onPlaneDragRef.current = onPlaneDrag;
   const onScalarDataRef = useRef(onScalarData);
   onScalarDataRef.current = onScalarData;
   const onBoundsRef = useRef(onBounds);
@@ -340,42 +416,99 @@ export default function Viewport({
         screenY: clientY - rect.top,
       });
     };
-    const onMove = (e) => doPick(e.clientX, e.clientY);
+    // Ray-pick the actor directly under the cursor (used both for surface picking
+    // and to detect a grab on the translucent cutting plane).
+    const pickActorAt = (clientX, clientY) => {
+      const ctx = contextRef.current;
+      if (!ctx) return { actor: null, pos: null, cellId: -1 };
+      const rect = el.getBoundingClientRect();
+      const size = ctx.apiRenderWindow.getSize();
+      const ratioX = rect.width ? size[0] / rect.width : 1;
+      const ratioY = rect.height ? size[1] / rect.height : 1;
+      const x = (clientX - rect.left) * ratioX;
+      const y = (rect.height - (clientY - rect.top)) * ratioY;
+      ctx.picker.pick([x, y, 0], ctx.renderer);
+      const actors = ctx.picker.getActors();
+      return {
+        actor: actors && actors.length ? actors[0] : null,
+        pos: ctx.picker.getPickPosition(),
+        cellId: ctx.picker.getCellId(),
+      };
+    };
+
+    const onMove = (e) => {
+      const ctx = contextRef.current;
+      // ---- dragging the cutting plane: slide it along its own normal ---------
+      if (ctx && ctx.planeDrag) {
+        const dyPx = ctx.planeDrag.lastY - e.clientY; // up = positive
+        ctx.planeDrag.lastY = e.clientY;
+        // world-mm per pixel ≈ plane extent / canvas height, so a full-height drag
+        // slides the plane by ~its own size — a natural feel at any zoom.
+        const rect = el.getBoundingClientRect();
+        const mmPerPx = rect.height ? (ctx.planeDrag.sizeMm || 200) / rect.height : 0.3;
+        onPlaneDragRef.current?.(dyPx * mmPerPx);
+        onHoverRef.current?.(null);
+        return;
+      }
+      doPick(e.clientX, e.clientY);
+    };
     const onLeave = () => onHoverRef.current?.(null);
     el.addEventListener('mousemove', onMove);
     el.addEventListener('mouseleave', onLeave);
 
-    // ---- click picking (surface point -> MPR crosshair) --------------------
+    // ---- click picking (surface point -> MPR crosshair) + plane grab --------
     // We only treat it as a "pick" click when the pointer didn't move far
     // between down and up, so orbiting the camera (a drag) never fires a pick.
     let downX = 0;
     let downY = 0;
     let downT = 0;
+    const endPlaneDrag = () => {
+      const ctx = contextRef.current;
+      if (ctx && ctx.planeDrag) {
+        // restore the camera interactor style we suspended during the grab.
+        if (ctx.planeDrag.style !== undefined) ctx.interactor.setInteractorStyle(ctx.planeDrag.style);
+        ctx.planeDrag = null;
+        el.style.cursor = '';
+      }
+    };
     const onDown = (e) => {
       downX = e.clientX;
       downY = e.clientY;
       downT = Date.now();
+      const ctx = contextRef.current;
+      // Grab the plane only when it's actually shown (oblique mode) and the click
+      // lands on it (closest hit). Suspend camera orbit for the duration so the
+      // drag slides the plane instead of rotating the scene.
+      if (e.button === 0 && ctx && ctx.planeActor && ctx.planeActor.getVisibility()) {
+        const hit = pickActorAt(e.clientX, e.clientY);
+        if (hit.actor === ctx.planeActor) {
+          ctx.planeDrag = {
+            lastY: e.clientY,
+            sizeMm: ctx.planeSizeMm || 200,
+            style: ctx.interactor.getInteractorStyle(),
+          };
+          ctx.interactor.setInteractorStyle(null);
+          el.style.cursor = 'ns-resize';
+          e.preventDefault();
+        }
+      }
     };
     const onUp = (e) => {
       if (e.button !== 0) return;
+      const ctx = contextRef.current;
+      if (ctx && ctx.planeDrag) { endPlaneDrag(); return; }
       const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
       if (moved > 5 || Date.now() - downT > 500) return; // a drag, not a click
-      const ctx = contextRef.current;
       if (!ctx || !ctx.actor || !ctx.polydata) return;
-      const rect = el.getBoundingClientRect();
-      const size = ctx.apiRenderWindow.getSize();
-      const ratioX = rect.width ? size[0] / rect.width : 1;
-      const ratioY = rect.height ? size[1] / rect.height : 1;
-      const x = (e.clientX - rect.left) * ratioX;
-      const y = (rect.height - (e.clientY - rect.top)) * ratioY;
-      ctx.picker.pick([x, y, 0], ctx.renderer);
-      const actors = ctx.picker.getActors();
-      if (!actors || actors.length === 0 || ctx.picker.getCellId() < 0) return;
-      const pos = ctx.picker.getPickPosition();
-      onPickRef.current?.([pos[0], pos[1], pos[2]]);
+      const hit = pickActorAt(e.clientX, e.clientY);
+      if (!hit.actor || hit.cellId < 0) return;
+      onPickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]]);
     };
     el.addEventListener('mousedown', onDown);
     el.addEventListener('mouseup', onUp);
+    // Safety: if the mouse is released outside the canvas, still end the grab so
+    // camera control is always restored.
+    window.addEventListener('mouseup', endPlaneDrag);
 
     const onResize = () => genericRenderWindow.resize();
     window.addEventListener('resize', onResize);
@@ -396,6 +529,7 @@ export default function Viewport({
       el.removeEventListener('mouseleave', onLeave);
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('mouseup', onUp);
+      window.removeEventListener('mouseup', endPlaneDrag);
       orientationWidget.setEnabled(false);
       genericRenderWindow.delete();
       contextRef.current = null;
@@ -449,6 +583,7 @@ export default function Viewport({
         renderer.addActor(ctx.actor);
         ctx.polydata = polydata;
         ctx.lastUrl = geometry.url;
+        ctx.adjacency = null; // topology changed — invalidate the smoothing graph
         // A new geometry means a brand-new vtkMapper instance with no clipping
         // planes yet; the clip-box effect below (keyed partly on geometry.url)
         // re-adds them if a clip is currently active.
@@ -479,7 +614,11 @@ export default function Viewport({
       ctx.mapper.setScalarRange(geometry.rangeMin, geometry.rangeMax);
       ctx.mapper.setColorModeToMapScalars();
       ctx.mapper.setScalarModeToUsePointFieldData();
-      ctx.mapper.setColorByArrayName(geometry.scalar);
+      // Colour by the smoothed DISPLAY copy when colour smoothing is on; hover +
+      // the scalar array handed to the Stats panel still read the raw values.
+      ctx.mapper.setColorByArrayName(
+        colorArrayForDisplay(ctx, ctx.polydata, geometry.scalar, colorSmoothIters),
+      );
       ctx.mapper.setInterpolateScalarsBeforeMapping(true);
 
       if (cancelled) return;
@@ -500,6 +639,7 @@ export default function Viewport({
     geometry?.steps,
     geometry?.reverse,
     geometry?.colormap,
+    colorSmoothIters,
   ]);
 
   // ---- optional SECOND mesh (bilateral "Both" view) -------------------------
@@ -539,6 +679,7 @@ export default function Viewport({
         renderer.addActor(ctx.actor2);
         ctx.polydata2 = polydata;
         ctx.lastUrl2 = secondGeometry.url;
+        ctx.adjacency2 = null;
       }
       if (!ctx.mapper2) return;
       ctx.scalarName2 = secondGeometry.scalar;
@@ -554,7 +695,9 @@ export default function Viewport({
       ctx.mapper2.setScalarRange(secondGeometry.rangeMin, secondGeometry.rangeMax);
       ctx.mapper2.setColorModeToMapScalars();
       ctx.mapper2.setScalarModeToUsePointFieldData();
-      ctx.mapper2.setColorByArrayName(secondGeometry.scalar);
+      ctx.mapper2.setColorByArrayName(
+        colorArrayForDisplay(ctx, ctx.polydata2, secondGeometry.scalar, colorSmoothIters, 'adjacency2'),
+      );
       ctx.mapper2.setInterpolateScalarsBeforeMapping(true);
       if (cancelled) return;
       // Frame both meshes together only when the second mesh is (re)loaded.
@@ -577,6 +720,7 @@ export default function Viewport({
     secondGeometry?.colormap,
     // Re-frame both when the PRIMARY mesh changes underneath a live second mesh.
     geometry?.url,
+    colorSmoothIters,
   ]);
 
   // ---- clip box: move the 6 planes, toggle them on the mapper, recompute the
@@ -699,6 +843,7 @@ export default function Viewport({
         n[0] * u[1] - n[1] * u[0],
       ];
       const half = (plane.sizeMm ?? 200) / 2;
+      ctx.planeSizeMm = plane.sizeMm ?? 200; // for the grab-to-slide sensitivity
       const [ox, oy, oz] = plane.origin;
       // PlaneSource: origin + point1 (defines one edge) + point2 (defines the
       // other edge); the actor's quad spans origin..point1 x origin..point2.

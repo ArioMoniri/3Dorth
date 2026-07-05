@@ -24,6 +24,7 @@ import pyvista as pv
 
 import core.parameters as P
 from core.viz import get_cmap
+from core.meshing.surface import smooth_point_scalar_display
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = ROOT / "outputs" / "demo"
@@ -72,9 +73,12 @@ def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=
 
     cmap = get_cmap(params.mode_a_colormap, params.mode_a_colormap_reverse)
     clim = [params.mode_a_range_min, params.mode_a_range_max]
+    # DISPLAY-ONLY colour smoothing (raw thickness untouched; stats stay honest).
+    csi = int(getattr(params, "color_smooth_iters", 0) or 0)
+    color_scalar = smooth_point_scalar_display(mesh, "thickness_mm", csi)
     plotter.add_mesh(
         mesh,
-        scalars="thickness_mm",
+        scalars=color_scalar,
         cmap=cmap,
         n_colors=params.mode_a_colorbar_steps,
         clim=clim,
@@ -92,7 +96,7 @@ def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=
         # both since the clim/colormap are shared).
         plotter.add_mesh(
             second_mesh,
-            scalars="thickness_mm",
+            scalars=smooth_point_scalar_display(second_mesh, "thickness_mm", csi),
             cmap=cmap,
             n_colors=params.mode_a_colorbar_steps,
             clim=clim,
@@ -116,9 +120,11 @@ def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
 
     center = params.mode_b_center
     span = params.mode_b_range_abs
+    csi = int(getattr(params, "color_smooth_iters", 0) or 0)
+    dev_scalar = smooth_point_scalar_display(mesh, "deviation_mm", csi)
     plotter.add_mesh(
         mesh,
-        scalars="deviation_mm",
+        scalars=dev_scalar,
         cmap=get_cmap("blue_white_red"),
         n_colors=params.mode_b_colorbar_steps,
         clim=[center - span, center + span],
