@@ -140,8 +140,9 @@ REGISTRY: list[ParamSpec] = [
     ),
     ParamSpec(
         key="mode_a_colorbar_steps", label="Colorbar steps (Mode A)", group="Coloring",
-        control=ControlType.INT, default=7, minimum=2, maximum=20, step=1, mode=Mode.A,
-        help="Number of discrete legend bands. Paper Fig. 2 uses 7.",
+        control=ControlType.INT, default=7, minimum=2, maximum=64, step=1, mode=Mode.A,
+        help="Number of discrete legend bands. Paper Fig. 2 uses 7; raise toward 64 "
+             "for a smooth, near-continuous gradient.",
     ),
 
     # ---- Measurement tools (Mode A) ----------------------------------------
@@ -207,8 +208,9 @@ REGISTRY: list[ParamSpec] = [
     ),
     ParamSpec(
         key="mode_b_colorbar_steps", label="Colorbar steps (Mode B)", group="Coloring",
-        control=ControlType.INT, default=11, minimum=3, maximum=21, step=2, mode=Mode.B,
-        help="Number of discrete diverging bands for the deviation colorbar.",
+        control=ControlType.INT, default=11, minimum=3, maximum=65, step=2, mode=Mode.B,
+        help="Number of discrete diverging bands for the deviation colorbar. Raise "
+             "toward 65 for a smooth, near-continuous gradient (finer differences).",
     ),
 
     # ---- Meshing ------------------------------------------------------------
