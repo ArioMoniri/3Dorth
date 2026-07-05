@@ -1131,7 +1131,10 @@ export default function App() {
                   pickedWorld={marker}
                   onPlaneChange={setObliquePlane}
                   onPixelPick={onObliquePixelPick}
-                  compareMode={canCompareSides}
+                  // Two-box matched compare ONLY when actually comparing (Mode B /
+                  // deviation). In Mode A the user is analysing ONE side, so show that
+                  // side's single cross-section — not a forced (often unreliable) match.
+                  compareMode={isDeviationView && canCompareSides}
                   referenceSide={referenceSide}
                   targetSide={targetSide}
                   params={values}
