@@ -2257,3 +2257,33 @@ body {
   background: #e0673a;
   opacity: 0.7;
 }
+
+/* ---- comparison guide + reference/target swap ------------------------------ */
+.deviation-setup .compare-guide {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+.deviation-setup .compare-guide b[title],
+.ctl-label[title] {
+  border-bottom: 1px dotted var(--text-muted);
+  cursor: help;
+}
+.swap-sides-btn {
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-2);
+  background: #eef0f6;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.swap-sides-btn:hover:not(:disabled) {
+  background: #e2e5ef;
+}
+.swap-sides-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

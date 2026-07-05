@@ -191,8 +191,24 @@ export default function ControlPanel({
 
         {showDeviation && (
           <div className="deviation-setup">
+            <p className="panel-hint compare-guide">
+              <strong>What to compare.</strong> Deviation compares two bone surfaces of
+              the <em>same</em> anatomy — e.g. an operated humerus vs the contralateral
+              side. Load a <em>bilateral</em> CT (one scan containing both sides); Mode&nbsp;B
+              then aligns and compares Left vs Right. The{' '}
+              <b title="Baseline surface. Deviation is signed relative to this one (0 mm).">reference</b>{' '}
+              is the baseline; the{' '}
+              <b title="Surface measured against the reference. + = target sits outside the reference (bone gained); − = inside (lost).">target</b>{' '}
+              is measured against it, so <b>swapping them flips the sign and the
+              red/blue colours</b>.
+            </p>
             <label className="ctl ctl-enum">
-              <span className="ctl-label">Reference side</span>
+              <span
+                className="ctl-label"
+                title="Baseline surface — deviation is signed relative to this one (0 mm)"
+              >
+                Reference side
+              </span>
               <select
                 value={referenceSide}
                 onChange={(e) => onReferenceSideChange(e.target.value)}
@@ -205,7 +221,12 @@ export default function ControlPanel({
               </select>
             </label>
             <label className="ctl ctl-enum">
-              <span className="ctl-label">Target side</span>
+              <span
+                className="ctl-label"
+                title="Surface measured against the reference; + = outside the reference (bone gained)"
+              >
+                Target side
+              </span>
               <select
                 value={targetSide}
                 onChange={(e) => onTargetSideChange(e.target.value)}
@@ -217,8 +238,22 @@ export default function ControlPanel({
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="swap-sides-btn"
+              onClick={onSwapSides}
+              disabled={!referenceSide || referenceSide === targetSide}
+              title="Swap reference and target — flips the deviation sign and the red/blue colours, then recomputes"
+            >
+              ⇄ Swap reference / target
+            </button>
             <label className="ctl ctl-bool">
-              <span className="ctl-label">Mirror across sagittal plane</span>
+              <span
+                className="ctl-label"
+                title="Reflect the target across the sagittal (L↔R) plane before aligning — needed when comparing a left bone to a right one"
+              >
+                Mirror across sagittal plane
+              </span>
               <input
                 type="checkbox"
                 checked={Boolean(mirror)}
