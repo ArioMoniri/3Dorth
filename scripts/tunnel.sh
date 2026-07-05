@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 APP_PORT="${1:-8000}"; TRAME_PORT="${2:-}"
 OUT="outputs/public_urls.json"; mkdir -p outputs
-TOOLS="$(pwd)/.tools"; [ -x "$TOOLS/cloudflared" ] && export PATH="$TOOLS:$PATH"
+TOOLS="$(pwd)/.tools"; [ -d "$TOOLS" ] && export PATH="$TOOLS:$PATH"   # find local cloudflared/ngrok
 LOGD="$(pwd)/outputs/.tunnel"; mkdir -p "$LOGD"; trap kill_prev EXIT INT TERM   # logs persist for inspection
 
 kill_prev() {
@@ -33,10 +33,13 @@ _tcp_open() {  # host port -> 0 if a TCP connect succeeds within 6s
 
 detect_provider() {
   [ -n "${TUNNEL_PROVIDER:-}" ] && { echo "$TUNNEL_PROVIDER"; return; }
+  # cloudflare only if 7844 is actually reachable (often firewalled)
   if command -v cloudflared >/dev/null 2>&1 && _tcp_open region1.v2.argotunnel.com 7844; then echo cloudflare; return; fi
-  if command -v ssh >/dev/null 2>&1 && _tcp_open a.pinggy.io 443; then echo pinggy; return; fi
+  # ngrok next when configured — no session time limit, clean URL, TLS-over-443
   if command -v ngrok >/dev/null 2>&1 && ngrok config check >/dev/null 2>&1; then echo ngrok; return; fi
-  if command -v cloudflared >/dev/null 2>&1; then echo cloudflare; return; fi   # last resort: try anyway
+  # pinggy last (no account, but 60-min sessions + a visitor splash page)
+  if command -v ssh >/dev/null 2>&1 && _tcp_open a.pinggy.io 443; then echo pinggy; return; fi
+  if command -v cloudflared >/dev/null 2>&1; then echo cloudflare; return; fi   # last resort
   echo off
 }
 
