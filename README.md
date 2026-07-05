@@ -51,7 +51,9 @@ Everything is interactive and applies in real time:
 
 - **Load** a DICOM `.zip`, NIfTI, or a surface mesh — or use the bundled
   de-identified demo. A bilateral scan splits into Left/Right; pick a **region**
-  by its thumbnail, and view **Left, Right, or both sides together (Bilateral)**.
+  by its thumbnail, view **Left, Right, or both sides together (Bilateral)**, or
+  **isolate a sub-part with a clip box — just click the part you want** on the 3D
+  surface to centre the box on it (e.g. only the proximal humerus).
 - **Every parameter applies automatically** — colour/range/steps re-colour
   instantly, segmentation/thickness parameters re-run after a short pause (no
   Apply click needed).
@@ -65,15 +67,21 @@ Everything is interactive and applies in real time:
   (single-subject/descriptive, labelled as such).
 - **Measure on the CT images** — distance / angle tools on the 2D reformats (**MPR,
   oblique, and the two-bone compare panes**; mm read from the scan geometry), exported
-  *burned into* the PNG. Click a figure to enlarge, and **drag/resize** the overlay
-  panels (legend / stats / figures) anywhere.
-- **Smooth, publication surfaces** — a display-only **surface reconstruction** (`raw` /
-  `smooth` / `wrap`): supersample resamples the voxel staircase away, windowed-sinc
-  removes residual steps, and a **pyacvd isotropic remesh** yields a clean, watertight,
-  evenly-triangulated shell (the Mimics/3-matic look). Thickness stays on the raw mask
-  (the scalar is re-sampled onto the remeshed surface). The coloured bone + the discrete
-  Fig-2 colorbar — with optional **sampling-line / height-bracket** annotations — export
-  as PNG/TIFF at any DPI (the paper's Fig-2 A/B layout).
+  *burned into* the PNG. Click a figure to enlarge, and **drag/resize every overlay
+  panel** — legend, stats, figures, the clip box, and the cutting-plane controls —
+  anywhere on screen (drag pops it out to float; double-click the grip to re-dock).
+- **Smooth, publication surfaces — all adjustable from both UIs** — a display-only
+  **surface reconstruction** (`raw` / `smooth` / `wrap`): supersample resamples the
+  voxel staircase away, windowed-sinc removes residual steps, and a **pyacvd isotropic
+  remesh** yields a clean, watertight, evenly-triangulated shell (the Mimics/3-matic
+  look). Tune it from the **Meshing** group: **surface (tissue) smoothing**,
+  supersample, hole-fill, and **surface quality** (remesh triangle density), plus a
+  **colour smoothing** knob that smooths the *displayed* green→red gradient. All of
+  these are **display-only** — cortical thickness stays computed on the raw mask and
+  every statistic is unchanged (the scalar is re-sampled onto the remeshed surface).
+  The coloured bone + the discrete Fig-2 colorbar — with optional, **adjustably-placed
+  sampling-line / height-bracket** annotations — export as PNG/TIFF at any DPI (the
+  paper's Fig-2 A/B layout).
 - **Share** a public link — a resilient tunnel that **auto-selects whatever works from
   your network** (Cloudflare / Pinggy / Tailscale Funnel / serveo / your own relay) and
   survives sleep/wake — and **switch between the two UIs** from either one.
@@ -91,9 +99,10 @@ matched at every point — click the reformat and the 3D marker lands exactly th
 - **MPR** — axial / coronal / sagittal panels with a linked crosshair; click the
   3D bone and all three slices jump to that point, scrub a slice and the 3D marker
   follows.
-- **Oblique / any cross-section** — tilt a cutting plane to *any* orientation and
-  the 2D reformat is matched to the 3D cut **at every point** (click the reformat,
-  the 3D marker lands exactly there).
+- **Oblique / any cross-section** — tilt a cutting plane to *any* orientation —
+  **adjust its size, drag the blue plane in 3D to slide it along its normal, or click
+  a bone point to re-centre it** — and the 2D reformat is matched to the 3D cut **at
+  every point** (click the reformat, the 3D marker lands exactly there).
 - **Two-bone cross-section** — one movable plane, both bones' 2D CT shown as two
   boxes above the plane controls (the reference plane is mapped onto the other bone
   through the registration, so it's the *same* physical cut):
@@ -451,10 +460,10 @@ expose the same knobs (a test fails the build if they ever drift apart).
 </details>
 
 <details>
-<summary><b>Full parameter list (31 knobs) and reproducibility</b></summary>
+<summary><b>Full parameter list (36 knobs) and reproducibility</b></summary>
 
 Everything configurable lives in one registry,
-[`core/parameters.py`](core/parameters.py) — all 31 parameters with ranges and
+[`core/parameters.py`](core/parameters.py) — all 36 parameters with ranges and
 units. Both UIs read that registry, and the active values are written to
 [`config.yaml`](config.yaml), so re-running from a saved `config.yaml`
 reproduces the numbers. The defaults reproduce Guo et al. 2022:
