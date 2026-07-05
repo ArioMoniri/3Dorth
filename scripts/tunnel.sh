@@ -21,9 +21,9 @@ TOOLS="$(pwd)/.tools"; [ -x "$TOOLS/cloudflared" ] && export PATH="$TOOLS:$PATH"
 LOGD="$(pwd)/outputs/.tunnel"; mkdir -p "$LOGD"; trap kill_prev EXIT INT TERM   # logs persist for inspection
 
 kill_prev() {
-  pkill -f "cloudflared tunnel --url"          2>/dev/null
-  pkill -f "R0:127.0.0.1:.*a.pinggy.io"        2>/dev/null
-  pkill -f "ngrok http"                        2>/dev/null
+  pkill -9 -f "cloudflared tunnel --url" 2>/dev/null
+  pkill -9 -f "ssh .*pinggy"             2>/dev/null
+  pkill -9 -f "ngrok http"               2>/dev/null
 }
 
 _tcp_open() {  # host port -> 0 if a TCP connect succeeds within 6s
@@ -60,8 +60,9 @@ url_from() {  # extract the current public URL from a provider's log
   local prov="$1" log="$2"
   case "$prov" in
     cloudflare) grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | tail -1 ;;
-    # Pinggy TUNNEL urls are on *.pinggy.link / *.pinggy.online — NOT dashboard.pinggy.io
-    pinggy)     grep -oE 'https://[-a-z0-9.]+\.pinggy\.(link|online)' "$log" 2>/dev/null | grep -v dashboard | tail -1 ;;
+    # Pinggy TUNNEL urls live on several domains (pinggy-free.link, free.pinggy.net,
+    # a.free.pinggy.link, …) — match any https://…pinggy… EXCEPT dashboard.pinggy.io
+    pinggy)     grep -oiE 'https://[a-z0-9.-]*pinggy[a-z0-9.-]*' "$log" 2>/dev/null | grep -vi dashboard | head -1 ;;
     ngrok)      grep -oE 'https://[-a-z0-9]+\.ngrok[-a-z0-9.]*\.(app|io|dev)' "$log" 2>/dev/null | tail -1 ;;
   esac
 }

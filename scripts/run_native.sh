@@ -24,8 +24,22 @@ note_issue() { ISSUES="${ISSUES}\n  ${RED}•${RST} $*"; }
 retry() { local n="$1"; shift; local i=1; until "$@"; do [ "$i" -ge "$n" ] && return 1; warn "retry $i/$n: $*"; sleep $((i*2)); i=$((i+1)); done; }
 
 _kill_running() {
-  pkill -f "uvicorn api.main:app" 2>/dev/null; pkill -f "app_trame.app" 2>/dev/null
-  pkill -f "cloudflared tunnel" 2>/dev/null; pkill -f "scripts/share.sh" 2>/dev/null; sleep 1
+  # by process (force) — every mover the run may have started
+  pkill -9 -f "uvicorn api.main:app" 2>/dev/null; pkill -9 -f "app_trame.app" 2>/dev/null
+  pkill -9 -f "cloudflared tunnel"   2>/dev/null; pkill -9 -f "ssh .*pinggy" 2>/dev/null
+  pkill -9 -f "ngrok http"           2>/dev/null
+  pkill -9 -f "scripts/tunnel.sh"    2>/dev/null; pkill -9 -f "scripts/share.sh" 2>/dev/null
+  # by the ports a previous run recorded (kills a stray listener even if renamed)
+  if [ -f outputs/ports.env ]; then
+    # shellcheck disable=SC1091
+    . outputs/ports.env 2>/dev/null || true
+    for p in "${API_PORT:-}" "${TRAME_PORT:-}" "${REACT_PORT:-}"; do
+      [ -n "$p" ] || continue
+      if command -v fuser >/dev/null 2>&1; then fuser -k "${p}/tcp" 2>/dev/null
+      elif command -v lsof  >/dev/null 2>&1; then lsof -ti tcp:"$p" 2>/dev/null | xargs -r kill -9 2>/dev/null; fi
+    done
+  fi
+  sleep 2
 }
 
 WITH_TRAME=1; STRICT=1; RESTART=0
