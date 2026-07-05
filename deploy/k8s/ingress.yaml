@@ -1,0 +1,51 @@
+# 3Dorth public front door — the PROPER, always-on, laptop-free way to expose the app on
+# a cluster. Hand this to whoever administers the cluster (or apply it yourself if your
+# namespace has the RBAC). It targets the `3dorth-react` Service (port 80), which serves
+# the React UI and proxies `/api` to the API — so one hostname is the whole app.
+#
+# Pick ONE of the two below (delete the other), fill in ${NAMESPACE} and the host/class,
+# then:  envsubst < deploy/k8s/ingress.yaml | kubectl apply -f -
+#
+# ── OPTION A: Ingress (clean HTTPS at a hostname; needs an ingress controller + DNS) ──
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: 3dorth
+  namespace: ${NAMESPACE}
+  annotations:
+    # cert-manager auto-TLS (drop if the controller terminates TLS itself):
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # larger CT uploads through the proxy:
+    nginx.ingress.kubernetes.io/proxy-body-size: "300m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+spec:
+  ingressClassName: ${INGRESS_CLASS}          # e.g. nginx / traefik — ask your admin
+  tls:
+    - hosts: [ "${PUBLIC_HOST}" ]             # e.g. 3dorth.example.edu
+      secretName: 3dorth-tls
+  rules:
+    - host: "${PUBLIC_HOST}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: 3dorth-react
+                port: { number: 80 }
+---
+# ── OPTION B: NodePort (no ingress controller/DNS; reach it at http://<node-ip>:<port>) ──
+# Simpler, but the node IP must be reachable by your audience and the port is 30000-32767.
+apiVersion: v1
+kind: Service
+metadata:
+  name: 3dorth-react-nodeport
+  namespace: ${NAMESPACE}
+spec:
+  type: NodePort
+  selector:
+    app: 3dorth-react
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: ${NODE_PORT}                  # e.g. 30880 (must be free in 30000-32767)

@@ -84,9 +84,9 @@ row 5 "serveo (22)"      "$SERVEO_OK" "no signup"
 row 6 "Cloudflare"       "$CF_OK"     "needs port 7844 (usually blocked on pods)"
 printf "   ${BOLD}[0]${RST} %-18s  %-11s  ${DIM}%s${RST}\n" "ssh -L only" "" "no public link — just print the SSH command"
 echo
-printf "  ${DIM}No key or box of your own, and everything above is ✗? Run${RST} ${BOLD}./scripts/share_from_laptop.sh${RST}\n"
-printf "  ${DIM}ON YOUR LAPTOP — it relays this pod through the SSH you already use and opens${RST}\n"
-printf "  ${DIM}the public link from there (your laptop has open internet; the pod stays locked).${RST}\n"
+printf "  ${DIM}Everything above ✗? Two relay options (the pod can't tunnel, so the link comes from elsewhere):${RST}\n"
+printf "    ${BOLD}·${RST} laptop (quick, needs it left on):  ${BOLD}./scripts/share_from_laptop.sh${RST} ${DIM}— run ON YOUR LAPTOP${RST}\n"
+printf "    ${BOLD}·${RST} always-on box (laptop-free):       ${BOLD}./scripts/relay_server.sh${RST} ${DIM}on a VPS, then RELAY=… ./scripts/relay_connect.sh here${RST}\n"
 echo
 # recommend the best reachable option
 REC=0

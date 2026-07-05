@@ -152,35 +152,45 @@ emitted — it does **not** reject a working tunnel just because the locked pod 
 Read the verdict. Some pods block **everything** a public tunnel needs — not just the
 SSH-tunnel hosts, but Cloudflare's 7844 edge **and** Tailscale's DERP relays (the control
 plane connects, then Funnel can't serve). When only *generic* outbound 443 works, the pod
-**cannot open any tunnel itself**. You then have two real ways to give outsiders a link:
+**cannot open any tunnel itself** — the link has to come from somewhere always-on. Four
+ways, from zero-setup to proper:
 
-**① Relay through your laptop (zero infrastructure, guaranteed).** Your laptop already
-reaches the pod (you SSH in) and has open internet — so let it be the relay. Run this
-**on your laptop, not the pod**:
+**① Relay through your laptop (zero setup — but the link dies when the laptop sleeps).**
+Your laptop already reaches the pod and has open internet, so let it relay. Run **on your
+laptop, not the pod**:
 
 ```bash
 ./scripts/share_from_laptop.sh                 # defaults to 30405@10.6.110.10, port 8000
-# or: SSH_HOST=… SSH_PORT=… SSH_USER=… APP_PORT=8000 ./scripts/share_from_laptop.sh
 ```
 
-It `ssh -L`s the pod's app onto your laptop, then opens a Cloudflare quick tunnel **from
-the laptop** and prints the public `https://…trycloudflare.com` link. The pod stays fully
-locked; keep the terminal open (it's the relay). Needs `cloudflared` on the laptop
-(`brew install cloudflared`).
+It `ssh -L`s the pod's app onto the laptop, opens a Cloudflare tunnel **from the laptop**,
+and prints a `https://…trycloudflare.com` link. Keep the terminal open (it's the relay).
 
-**② A box you control** — if egress reaches `login.tailscale.com` **and** a DERP relay,
-Tailscale Funnel works; otherwise reverse-forward to any 443 host you own. The launcher
-**prompts** for whichever (paste a `tskey-…` key or a `user@host:443` relay), or via ENV:
+**② Always-on relay box — laptop-free.** A $0 free-tier VM (Oracle Cloud Always Free,
+GCP e2-micro, any cheap VPS) becomes a permanent front door. The pod reverse-forwards to
+it over 443; the box publishes it with its own Cloudflare tunnel. No open app port, no
+domain, no laptop:
 
 ```bash
-# Tailscale Funnel — needs a free key AND DERP reachable; the binary auto-installs
-#   1) https://login.tailscale.com/admin/settings/keys  → Reusable + Ephemeral key
-#   2) enable HTTPS + Funnel in the admin console (Settings → Features / ACL)
-TS_AUTHKEY=tskey-xxxx ./scripts/tunnel.sh 8000 8081     # → https://<host>.<tailnet>.ts.net
-
-# …or reverse-forward to a box YOU control (any 443 host works — not a known-tunnel domain)
-SSH_RELAY=user@your-host:443 ./scripts/tunnel.sh 8000   # relay needs GatewayPorts clientspecified
+# on the ALWAYS-ON box (installs cloudflared; prints the exact pod command; leave running):
+./scripts/relay_server.sh 8000
+# on the POD (reconnects on drops; background it so it outlives your SSH session):
+RELAY=user@your-box:443 nohup ./scripts/relay_connect.sh > outputs/relay.log 2>&1 &
 ```
+
+**③ A box you control, via the built-in providers.** If egress reaches
+`login.tailscale.com` **and** a DERP relay, Tailscale Funnel works; otherwise reverse-forward
+to any 443 host you own. `run_native.sh`/`tunnel_menu.sh` **prompt** for it, or via ENV:
+
+```bash
+TS_AUTHKEY=tskey-xxxx ./scripts/tunnel.sh 8000 8081     # Funnel → https://<host>.<tailnet>.ts.net
+SSH_RELAY=user@your-host:443 ./scripts/tunnel.sh 8000   # → http://<host>:8000 (sshd: GatewayPorts clientspecified)
+```
+
+**④ The proper way on a cluster — ask your admin (or apply it) for an Ingress/NodePort.**
+[`deploy/k8s/ingress.yaml`](deploy/k8s/ingress.yaml) exposes the `3dorth-react` Service at
+a real hostname over HTTPS (or a NodePort) — always on, no tunnel, no relay. This is the
+right answer for a Kubernetes deployment; the tunnels above are for when you can't get it.
 
 Other knobs (secrets from ENV only, never written to the repo):
 `TUNNEL_PROVIDER=pinggy|serveo|cloudflare|relay|tailscale` forces one;
