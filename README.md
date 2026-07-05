@@ -51,9 +51,15 @@ Everything is interactive and applies in real time:
 
 - **Load** a DICOM `.zip`, NIfTI, or a surface mesh — or use the bundled
   de-identified demo. A bilateral scan splits into Left/Right; pick a **region**
-  by its thumbnail, view **Left, Right, or both sides together (Bilateral)**, or
-  **isolate a sub-part with a clip box — just click the part you want** on the 3D
-  surface to centre the box on it (e.g. only the proximal humerus).
+  by its thumbnail, or view **Left, Right, or both sides together (Bilateral)** —
+  the bilateral view loads the **whole bone of each side** (every connected piece,
+  not just the largest).
+- **Isolate a bone by clicking it** — turn on **Clip / isolate**, tick *Load whole
+  bone (all pieces)*, then **click a piece** on the 3D surface: everything not
+  connected to it is hidden, leaving just that bone (e.g. the humerus). *Reset
+  clip* restores it; a per-axis clip box trims further. (Pieces that are fused in
+  the segmentation are one connected part — raise the HU threshold to separate
+  them.)
 - **Every parameter applies automatically** — colour/range/steps re-colour
   instantly, segmentation/thickness parameters re-run after a short pause (no
   Apply click needed).
