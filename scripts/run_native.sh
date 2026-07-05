@@ -24,6 +24,10 @@ note_issue() { ISSUES="${ISSUES}\n  ${RED}•${RST} $*"; }
 retry() { local n="$1"; shift; local i=1; until "$@"; do [ "$i" -ge "$n" ] && return 1; warn "retry $i/$n: $*"; sleep $((i*2)); i=$((i+1)); done; }
 
 _kill_running() {
+  # stop the API supervisor LOOP first (by recorded PID + tag) — else it would just
+  # respawn uvicorn the instant we kill it below.
+  [ -f outputs/api.sup.pid ] && { kill -9 "$(cat outputs/api.sup.pid)" 2>/dev/null; rm -f outputs/api.sup.pid; }
+  pkill -9 -f "3dorth-api-supervisor" 2>/dev/null
   # by process (force) — every mover the run may have started
   pkill -9 -f "uvicorn api.main:app" 2>/dev/null; pkill -9 -f "app_trame.app" 2>/dev/null
   pkill -9 -f "cloudflared tunnel"   2>/dev/null; pkill -9 -f "ssh .*pinggy" 2>/dev/null
@@ -178,9 +182,22 @@ fi
 # shellcheck disable=SC1091
 . ./scripts/pick_ports.sh
 APP_PORT="$API_PORT"
-step "Starting the app (API + UI) on ${BIND}:${APP_PORT}…"
-THREEDORTH_STATIC_DIR="${THREEDORTH_STATIC_DIR:-}" \
-  nohup .venv/bin/uvicorn api.main:app --host "$BIND" --port "$APP_PORT" > outputs/api.log 2>&1 &
+step "Starting the app (API + UI) on ${BIND}:${APP_PORT} — crash-resilient (auto-restarts uvicorn)…"
+# A tiny supervisor keeps uvicorn alive: if a native compute (open3d/VTK/SimpleITK) ever
+# segfaults or the OOM-killer takes the worker, uvicorn comes back within ~2s so port
+# ${APP_PORT} never stays dead (which is what left `ssh -L 8000` refused + "Failed to
+# fetch"). $0 is tagged "3dorth-api-supervisor" so _kill_running can stop the LOOP first
+# (otherwise it would just respawn uvicorn on --down/--restart). Logs + restarts → api.log.
+UVICORN="$(pwd)/.venv/bin/uvicorn"
+nohup bash -c '
+  uv="$1"; host="$2"; port="$3"; sd="$4"
+  while :; do
+    THREEDORTH_STATIC_DIR="$sd" "$uv" api.main:app --host "$host" --port "$port"
+    echo "$(date "+%F %T") [supervisor] API exited ($?) — restarting in 2s"
+    sleep 2
+  done
+' 3dorth-api-supervisor "$UVICORN" "$BIND" "$APP_PORT" "${THREEDORTH_STATIC_DIR:-}" > outputs/api.log 2>&1 &
+echo $! > outputs/api.sup.pid
 if [ "$WITH_TRAME" = 1 ]; then
   step "Starting trame on ${BIND}:${TRAME_PORT}…"
   nohup xvfb-run -a .venv/bin/python -m app_trame.app --server --host "$BIND" --port "$TRAME_PORT" --timeout 0 > outputs/trame.log 2>&1 &
