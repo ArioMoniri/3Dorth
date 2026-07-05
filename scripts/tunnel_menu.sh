@@ -53,7 +53,13 @@ else tcp() { _to 4 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }; fi
 banner
 step "Probing what this pod can reach (a few seconds)…"
 probe() { printf "  %-26s" "$1"; if tcp "$2" "$3"; then printf "${GRN}reachable${RST}\n"; return 0; else printf "${RED}blocked${RST}\n"; return 1; fi; }
-TS_OK=0;   probe "login.tailscale.com:443" login.tailscale.com 443 && TS_OK=1
+# Tailscale Funnel needs BOTH the control plane AND a DERP relay (443). login alone
+# being reachable is the trap: control connects, then Funnel can't serve (no DERP).
+TS_CTRL=0; probe "tailscale control:443"   login.tailscale.com 443 && TS_CTRL=1
+TS_DERP=0; probe "tailscale DERP:443"      derp1.tailscale.com 443 && TS_DERP=1
+TS_OK=0; [ "$TS_CTRL" = 1 ] && [ "$TS_DERP" = 1 ] && TS_OK=1
+TS_NOTE="recommended here; prompts for a free auth key (auto-installs)"
+[ "$TS_CTRL" = 1 ] && [ "$TS_DERP" = 0 ] && TS_NOTE="control OK but DERP blocked — Funnel can't serve from here"
 NET443=0;  probe "generic 443 (relay)"     example.com         443 && NET443=1
 NGROK_OK=0;probe "ngrok host:443"          bin.equinox.io      443 && NGROK_OK=1
 PINGGY_OK=0;probe "a.pinggy.io:443"        a.pinggy.io         443 && PINGGY_OK=1
@@ -70,13 +76,17 @@ row() { # $1 num  $2 name  $3 ok(0/1)  $4 note   (mark padded by hand so multiby
 echo
 step "${BOLD}Choose a public-link method${RST} (✓ = your pod can reach it):"
 echo
-row 1 "Tailscale Funnel" "$TS_OK"     "recommended here; prompts for a free auth key (auto-installs)"
+row 1 "Tailscale Funnel" "$TS_OK"     "$TS_NOTE"
 row 2 "SSH relay (yours)" "$NET443"   "prompts for user@host:443 of a box YOU control"
 row 3 "ngrok"            "$NGROK_OK"  "$([ "$NGROK_CFG" = 1 ] && echo 'already configured' || echo 'prompts for an authtoken')"
 row 4 "Pinggy (443)"     "$PINGGY_OK" "no signup; 60-min sessions"
 row 5 "serveo (22)"      "$SERVEO_OK" "no signup"
 row 6 "Cloudflare"       "$CF_OK"     "needs port 7844 (usually blocked on pods)"
 printf "   ${BOLD}[0]${RST} %-18s  %-11s  ${DIM}%s${RST}\n" "ssh -L only" "" "no public link — just print the SSH command"
+echo
+printf "  ${DIM}No key or box of your own, and everything above is ✗? Run${RST} ${BOLD}./scripts/share_from_laptop.sh${RST}\n"
+printf "  ${DIM}ON YOUR LAPTOP — it relays this pod through the SSH you already use and opens${RST}\n"
+printf "  ${DIM}the public link from there (your laptop has open internet; the pod stays locked).${RST}\n"
 echo
 # recommend the best reachable option
 REC=0

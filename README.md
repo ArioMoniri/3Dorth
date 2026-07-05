@@ -149,15 +149,32 @@ emitted — it does **not** reject a working tunnel just because the locked pod 
 `run_native.sh` launches the menu automatically when run in an interactive shell (a
 `nohup`/CI run with no TTY falls back to auto-selection from ENV instead).
 
-Read the verdict: if **every** SSH-tunnel host is BLOCKED but generic 443 and
-`login.tailscale.com` are OPEN (a common "known-tunnel-domains blocklist" pod), the only
-public paths left are **Tailscale Funnel** or an **SSH relay you control**. The launcher
-now **prompts** for whichever you want (paste a `tskey-…` key or a `user@host:443` relay),
-or take it non-interactively via ENV:
+Read the verdict. Some pods block **everything** a public tunnel needs — not just the
+SSH-tunnel hosts, but Cloudflare's 7844 edge **and** Tailscale's DERP relays (the control
+plane connects, then Funnel can't serve). When only *generic* outbound 443 works, the pod
+**cannot open any tunnel itself**. You then have two real ways to give outsiders a link:
+
+**① Relay through your laptop (zero infrastructure, guaranteed).** Your laptop already
+reaches the pod (you SSH in) and has open internet — so let it be the relay. Run this
+**on your laptop, not the pod**:
 
 ```bash
-# Tailscale Funnel — needs a free key; the tailscale binary auto-installs into ./.tools
-#   1) https://login.tailscale.com/admin/settings/keys  → generate a Reusable + Ephemeral key
+./scripts/share_from_laptop.sh                 # defaults to 30405@10.6.110.10, port 8000
+# or: SSH_HOST=… SSH_PORT=… SSH_USER=… APP_PORT=8000 ./scripts/share_from_laptop.sh
+```
+
+It `ssh -L`s the pod's app onto your laptop, then opens a Cloudflare quick tunnel **from
+the laptop** and prints the public `https://…trycloudflare.com` link. The pod stays fully
+locked; keep the terminal open (it's the relay). Needs `cloudflared` on the laptop
+(`brew install cloudflared`).
+
+**② A box you control** — if egress reaches `login.tailscale.com` **and** a DERP relay,
+Tailscale Funnel works; otherwise reverse-forward to any 443 host you own. The launcher
+**prompts** for whichever (paste a `tskey-…` key or a `user@host:443` relay), or via ENV:
+
+```bash
+# Tailscale Funnel — needs a free key AND DERP reachable; the binary auto-installs
+#   1) https://login.tailscale.com/admin/settings/keys  → Reusable + Ephemeral key
 #   2) enable HTTPS + Funnel in the admin console (Settings → Features / ACL)
 TS_AUTHKEY=tskey-xxxx ./scripts/tunnel.sh 8000 8081     # → https://<host>.<tailnet>.ts.net
 
