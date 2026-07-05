@@ -44,8 +44,8 @@ npm run preview   # serve the production build locally
   `/api/demo/manifest`), then a registry-driven parameter panel grouped by
   `group` into collapsible sections. Every control from `/api/parameters` is
   rendered (slider for int/float, dropdown for enum, switch for bool) and
-  seeded from the API `defaults` (the paper's values). A "Reset to paper
-  defaults" button restores them.
+  seeded from the API `defaults` (the paper's values). A "Reset to defaults"
+  button restores them.
 - **Center** — a vtk.js viewport (bone + orientation axes only).
   - *Mode A*: `thickness.vtp` colored by the `thickness_mm` point scalar with a
     discrete green→yellow→red lookup table (`colorbar_steps` bands) over

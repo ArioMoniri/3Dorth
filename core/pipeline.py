@@ -354,6 +354,10 @@ def compare_sides(ref, tgt, params, *, manual_transform=None) -> dict:
     reg = register(moving, ref_mesh, voxel_size=params.reg_voxel_size, icp_iters=params.reg_icp_iters)
     transform = _compose_transforms(reg.transform, manual_transform)
     aligned = apply_transform(moving, transform)
+    # Sign convention (do not "fix" the arg order): ref_mesh is the COLOURED/query
+    # surface (the side kept on top); `aligned` (the registered contralateral) is the
+    # geometric reference. So positive deviation = the coloured surface sits OUTSIDE
+    # the other surface = bone gain. Verified end-to-end on concentric-sphere phantoms.
     dev = signed_distance(ref_mesh, aligned, convention=params.signed_distance_sign)
     ref_mesh["deviation_mm"] = np.asarray(dev)
 

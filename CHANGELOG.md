@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- "Surface hole-fill" meshing control (`mesh_close_iters`): morphological closing
+  before marching cubes for a smoother, less-lacy surface — display-only; cortical
+  thickness is still computed on the raw mask.
+- On-image measurement tools (distance / angle) on the 2D reformats, with mm from
+  the scan geometry and an "Export with measures" that burns them into the PNG.
+- Draggable + resizable overlay panels (colorbar legend, statistics, figures).
 - Interactive compute-on-demand backend (`core/pipeline`, `api/routers/session`):
   load a scan, split a bilateral study into sides, and re-run segmentation +
   cortical thickness with the current parameters, so every side-panel control
