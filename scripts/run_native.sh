@@ -217,7 +217,13 @@ printf "    then open  ${BOLD}http://localhost:${APP_PORT}${RST}  (React)"
 [ "$WITH_TRAME" = 1 ] && printf "   and  ${BOLD}http://localhost:${TRAME_PORT}${RST}  (trame)"
 echo
 
+# Interactive terminal → let the user SEE what's reachable and pick + fill in what it
+# needs (Tailscale key / SSH relay / ngrok token). nohup/CI (no tty) → auto from ENV.
+if [ -t 0 ] && [ -x scripts/tunnel_menu.sh ]; then
+  echo; step "Pick a public-link method (probes what THIS pod can actually reach)…"
+  exec ./scripts/tunnel_menu.sh "$APP_PORT" "$TRAME_PORT"
+fi
 # shellcheck disable=SC1091
-. ./scripts/setup_tunnel_token.sh    # optionally set up ngrok (stable, no time limit)
-echo; step "Opening a public link (auto-picks a tunnel that works from here; if all are blocked, run ./scripts/egress_probe.sh)…"
+. ./scripts/setup_tunnel_token.sh    # env-only here (its prompt is tty-gated)
+echo; step "Opening a public link (auto; if all blocked, run ./scripts/tunnel_menu.sh in an interactive shell, or ./scripts/egress_probe.sh)…"
 exec ./scripts/tunnel.sh "$APP_PORT" "$TRAME_PORT"

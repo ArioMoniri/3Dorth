@@ -233,6 +233,7 @@ if [ -z "$PICK" ]; then
   err "       SSH_RELAY=user@your-host:443 ./scripts/tunnel.sh ${APP_PORT}   (relay needs GatewayPorts clientspecified)"
   err "  3) Expose a cluster Ingress / NodePort via your admin."
   err "  Diagnose exactly what IS reachable:  ./scripts/egress_probe.sh"
+  err "  Pick a provider interactively (shows ✓/✗ + prompts for keys):  ./scripts/tunnel_menu.sh"
   printf '{\n  "react_url": "",\n  "trame_url": "",\n  "self_verified": false,\n  "note": "no public tunnel reachable (egress blocked) — use SSH -L, an SSH_RELAY you control, or a Kubernetes Ingress; run scripts/egress_probe.sh"\n}\n' > "$OUT"
   exit 0
 fi

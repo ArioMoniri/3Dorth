@@ -134,10 +134,15 @@ emitted — it does **not** reject a working tunnel just because the locked pod 
 **Egress-locked pod? Diagnose first, don't guess.**
 
 ```bash
-./scripts/egress_probe.sh          # OPEN/BLOCKED table of every host:port a tunnel needs
-                                   # + a one-line "USE →" verdict (and detects the Pinggy
-                                   # false-reject trap: control open, public edge blocked)
+./scripts/tunnel_menu.sh           # INTERACTIVE picker: probes what THIS pod can reach,
+                                   # shows each provider ✓reachable/✗blocked, you choose one,
+                                   # it prompts for whatever that needs (key/relay/token)
+./scripts/egress_probe.sh          # or just the raw OPEN/BLOCKED table + a "USE →" verdict
+                                   # (detects the Pinggy false-reject trap: control open, edge blocked)
 ```
+
+`run_native.sh` launches the menu automatically when run in an interactive shell (a
+`nohup`/CI run with no TTY falls back to auto-selection from ENV instead).
 
 Read the verdict: if **every** SSH-tunnel host is BLOCKED but generic 443 and
 `login.tailscale.com` are OPEN (a common "known-tunnel-domains blocklist" pod), the only
