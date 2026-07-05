@@ -250,9 +250,11 @@ REGISTRY: list[ParamSpec] = [
 
     # ---- Meshing ------------------------------------------------------------
     ParamSpec(
-        key="mesh_smooth_iters", label="Mesh smoothing iters", group="Meshing",
+        key="mesh_smooth_iters", label="Surface (tissue) smoothing", group="Meshing",
         control=ControlType.INT, default=20, minimum=0, maximum=200, step=1,
-        help="Taubin smoothing iterations (shape-preserving).",
+        help="Taubin smoothing iterations on the bone surface (shape-preserving) — "
+             "the main 'tissue' smoothing knob: higher = smoother, glossier surface. "
+             "Display only; cortical thickness is computed on the raw mask.",
     ),
     ParamSpec(
         key="mesh_decimate_fraction", label="Mesh decimation", group="Meshing",
@@ -288,6 +290,14 @@ REGISTRY: list[ParamSpec] = [
              "thickness stays computed on the raw thresholded mask at native spacing, "
              "then re-sampled onto the reconstructed vertices (single-subject, "
              "descriptive).",
+    ),
+    ParamSpec(
+        key="surface_quality", label="Surface quality", group="Meshing",
+        control=ControlType.FLOAT, default=1.0, minimum=0.3, maximum=3.0, step=0.1,
+        help="Density of the reconstructed ('wrap'/'smooth') surface — a multiplier "
+             "on the auto triangle budget. Higher = a finer, higher-quality tissue "
+             "surface (more triangles, slower render); lower = lighter. Display-only "
+             "cosmetic mesh; cortical thickness is computed on the raw mask.",
     ),
 
     # ---- Views --------------------------------------------------------------
