@@ -50,6 +50,28 @@ RELAY_REMOTE_PORT="${RELAY_REMOTE_PORT:-$APP_PORT}"
 TS_HOSTNAME="${TS_HOSTNAME:-3dorth-pod}"
 TS_SOCK="$TOOLS/tailscaled.sock"
 
+# Auto-install tailscale (userspace binaries) into ./.tools when a key is provided but
+# the binary is missing. pkgs.tailscale.com is plain 443 and reachable even on pods that
+# block every SSH-tunnel host — which is exactly when Funnel is the only way out.
+ensure_tailscale() {
+  [ -n "${TS_AUTHKEY:-}" ] || return 0
+  { command -v tailscaled >/dev/null 2>&1 || [ -x "$TOOLS/tailscaled" ]; } && return 0
+  local arch=amd64; case "$(uname -m)" in aarch64|arm64) arch=arm64 ;; esac
+  local ver; ver="$(curl -fsSL https://pkgs.tailscale.com/stable/ 2>/dev/null \
+      | grep -oE "tailscale_[0-9.]+_${arch}\.tgz" | head -1 | sed -E "s/.*_([0-9.]+)_${arch}\.tgz/\1/")"
+  [ -n "$ver" ] || ver="1.98.8"
+  step "installing tailscale ${ver} (userspace, ./.tools — no root, removable)…"
+  mkdir -p "$TOOLS"
+  if curl -fSL "https://pkgs.tailscale.com/stable/tailscale_${ver}_${arch}.tgz" -o "$TOOLS/ts.tgz" 2>"$TOOLS/ts.err" \
+     && tar xzf "$TOOLS/ts.tgz" -C "$TOOLS" --strip-components=1 \
+          "tailscale_${ver}_${arch}/tailscale" "tailscale_${ver}_${arch}/tailscaled" 2>>"$TOOLS/ts.err"; then
+    rm -f "$TOOLS/ts.tgz"; chmod +x "$TOOLS/tailscale" "$TOOLS/tailscaled" 2>/dev/null
+    export PATH="$TOOLS:$PATH"; ok "tailscale ready"
+  else
+    warn "tailscale install failed: $(tail -1 "$TOOLS/ts.err" 2>/dev/null) — other providers / ssh -L still apply"
+  fi
+}
+
 kill_all() {
   pkill -9 -f "cloudflared tunnel --url"        2>/dev/null
   pkill -9 -f "ssh .*a.pinggy.io"               2>/dev/null
@@ -167,6 +189,7 @@ keepalive() {      # $1 prov  $2 port  $3 log  — restarts the tunnel forever
 }
 
 # candidate providers, in preference order, filtered by what's installed/configured
+ensure_tailscale   # fetch tailscale on demand so `command -v tailscaled` below can pass
 CANDS=""
 if [ -n "${TUNNEL_PROVIDER:-}" ]; then CANDS="$TUNNEL_PROVIDER"; else
   [ -n "${SSH_RELAY:-}" ] && command -v ssh >/dev/null 2>&1 && CANDS="$CANDS relay"

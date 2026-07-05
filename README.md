@@ -139,10 +139,25 @@ emitted — it does **not** reject a working tunnel just because the locked pod 
                                    # false-reject trap: control open, public edge blocked)
 ```
 
-Knobs (secrets from ENV only, never written to the repo):
+Read the verdict: if **every** SSH-tunnel host is BLOCKED but generic 443 and
+`login.tailscale.com` are OPEN (a common "known-tunnel-domains blocklist" pod), the only
+public paths left are **Tailscale Funnel** or an **SSH relay you control**. The launcher
+now **prompts** for whichever you want (paste a `tskey-…` key or a `user@host:443` relay),
+or take it non-interactively via ENV:
+
+```bash
+# Tailscale Funnel — needs a free key; the tailscale binary auto-installs into ./.tools
+#   1) https://login.tailscale.com/admin/settings/keys  → generate a Reusable + Ephemeral key
+#   2) enable HTTPS + Funnel in the admin console (Settings → Features / ACL)
+TS_AUTHKEY=tskey-xxxx ./scripts/tunnel.sh 8000 8081     # → https://<host>.<tailnet>.ts.net
+
+# …or reverse-forward to a box YOU control (any 443 host works — not a known-tunnel domain)
+SSH_RELAY=user@your-host:443 ./scripts/tunnel.sh 8000   # relay needs GatewayPorts clientspecified
+```
+
+Other knobs (secrets from ENV only, never written to the repo):
 `TUNNEL_PROVIDER=pinggy|serveo|cloudflare|relay|tailscale` forces one;
-`SSH_RELAY=user@host:443` reverse-forwards to a box **you** control (needs
-`GatewayPorts clientspecified`); `TS_AUTHKEY=…` uses userspace Tailscale Funnel.
+`RELAY_REMOTE_PORT` / `TS_HOSTNAME` fine-tune the relay/Funnel endpoints.
 **Always-works fallback** (no public egress needed) — one SSH hop from your machine; the
 exact command (with the real ports) is printed at startup and saved to
 `outputs/ssh_access.txt`:

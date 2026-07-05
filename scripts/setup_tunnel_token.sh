@@ -54,3 +54,27 @@ else
     fi
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Locked pod? When 7844 + pinggy(443) + serveo/lhr(22) + ngrok are ALL blocked (confirm
+# with ./scripts/egress_probe.sh), the public-link paths left are Tailscale Funnel (rides
+# 443/DERP — reachable even here) or an SSH relay to a box YOU control. Provide either
+# non-interactively via ENV (TS_AUTHKEY=… or SSH_RELAY=user@host:443), or paste it here.
+# Enter skips → the app is still reachable with `ssh -L` (see outputs/ssh_access.txt).
+if [ "${TUNNEL_PROVIDER:-}" != ngrok ] && [ -z "${TS_AUTHKEY:-}" ] && [ -z "${SSH_RELAY:-}" ] && [ -t 0 ]; then
+  printf "\n  ${BOLD:-}Public link on a locked pod — paste one (or Enter to skip → use ssh -L):${RST:-}\n"
+  printf "    • ${BOLD:-}Tailscale${RST:-} auth key (${DIM:-}tskey-…${RST:-}) → Funnel over 443 ${BOLD:-}(recommended)${RST:-}\n"
+  printf "        ${DIM:-}https://login.tailscale.com/admin/settings/keys${RST:-} — make it Reusable + Ephemeral,\n"
+  printf "        then enable ${BOLD:-}HTTPS${RST:-} + ${BOLD:-}Funnel${RST:-} in the admin console (Settings → Features / ACL).\n"
+  printf "    • or an ${BOLD:-}SSH relay${RST:-} you control: ${DIM:-}user@host:443${RST:-} (relay needs GatewayPorts clientspecified)\n"
+  printf "  paste key / relay: "
+  read -r _ans || _ans=""
+  case "$_ans" in
+    tskey-*) export TS_AUTHKEY="$_ans"; export TUNNEL_PROVIDER=tailscale
+             echo "  ${GRN:-}✓${RST:-} Tailscale Funnel selected (the binary auto-installs next)" ;;
+    *@*)     export SSH_RELAY="$_ans";  export TUNNEL_PROVIDER=relay
+             echo "  ${GRN:-}✓${RST:-} SSH relay selected → ${_ans}" ;;
+    "")      echo "  ${DIM:-}skipped — reach the app with ssh -L (outputs/ssh_access.txt)${RST:-}" ;;
+    *)       echo "  ${YEL:-}!${RST:-} not a tskey-… key or user@host relay — skipped" ;;
+  esac
+fi
