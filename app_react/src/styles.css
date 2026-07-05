@@ -2302,3 +2302,50 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ---- on-image measurement tools -------------------------------------------- */
+.measure-tools-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px 2px;
+}
+.measure-toggle,
+.measure-export {
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #eef0f6;
+  color: var(--accent-2);
+  cursor: pointer;
+}
+.measure-toggle.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.measure-toggle:disabled,
+.measure-export:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.measure-overlay {
+  z-index: 6;
+}
+.measure-toolbar {
+  display: flex;
+  gap: 4px;
+}
+.measure-toolbar button {
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 5px;
+  background: rgba(10, 14, 22, 0.82);
+  color: #d7f7f1;
+  cursor: pointer;
+}
+.measure-toolbar button.active {
+  background: #28e0c8;
+  color: #06221e;
+}

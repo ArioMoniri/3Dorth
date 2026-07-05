@@ -34,6 +34,7 @@ import {
   obliqueCompare,
   obliquePixelToWorld,
 } from './api';
+import MeasureOverlay, { exportWithMeasures } from './MeasureOverlay';
 
 const DEBOUNCE_MS = 120;
 const DEG = Math.PI / 180;
@@ -87,6 +88,8 @@ export default function ObliqueView({
   const [elevation, setElevation] = useState(0); // degrees, from XY plane
   const [offsetMm, setOffsetMm] = useState(0); // slides origin along the normal
   const [center, setCenter] = useState(null); // [x,y,z] mm — base plane centre
+  const [measureMode, setMeasureMode] = useState(false); // on-image measurement tools
+  const [measures, setMeasures] = useState([]);
 
   const [image, setImage] = useState(null); // { url, meta } — single-box mode
   const [loading, setLoading] = useState(false);
@@ -621,11 +624,40 @@ export default function ObliqueView({
     <div className="mpr-wrap oblique-wrap">
       {controlsPanel}
 
+      <div className="measure-tools-row">
+        <button
+          type="button"
+          className={`measure-toggle${measureMode ? ' active' : ''}`}
+          onClick={() => setMeasureMode((v) => !v)}
+          disabled={!image}
+          title="Place distance / angle measurements on the reformat (mm from the scan geometry). Click to add points, drag to adjust."
+        >
+          {measureMode ? '✓ Measuring' : '📏 Measure'}
+        </button>
+        <button
+          type="button"
+          className="measure-export"
+          disabled={!image || measures.length === 0}
+          onClick={() =>
+            exportWithMeasures(
+              imgElRef.current, measures, image?.meta?.size_mm, 'distance', 'oblique_measured.png',
+            )
+          }
+          title="Download the reformat with the measurements burned into the image"
+        >
+          ⤓ Export with measures
+        </button>
+      </div>
+
       <div
         className="mpr-image-box oblique-image-box"
         ref={imgBoxRef}
-        onMouseDown={onImageClick}
-        title="Click the reformat to move the 3D marker to that exact point"
+        onMouseDown={measureMode ? undefined : onImageClick}
+        title={
+          measureMode
+            ? 'Measure mode — click to place points, drag handles to adjust'
+            : 'Click the reformat to move the 3D marker to that exact point'
+        }
       >
         {image ? (
           <>
@@ -653,6 +685,14 @@ export default function ObliqueView({
                 />
               </>
             )}
+            <MeasureOverlay
+              rect={rect}
+              sizeMm={image?.meta?.size_mm}
+              active={measureMode}
+              measures={measures}
+              onChange={setMeasures}
+              unitLabel="distance"
+            />
           </>
         ) : (
           <div className="oblique-empty">
