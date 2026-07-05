@@ -74,10 +74,15 @@ export function createSession() {
 // POST /api/upload (multipart, field 'file') -> same shape as /session.
 // Accepts .zip .nii .nii.gz .stl .ply .obj .vtp. A mesh upload returns
 // sides:['mesh'], is_mesh:true; a single-sided scan returns sides:['full'].
-export async function uploadFile(file) {
+export async function uploadFile(file, sessionId) {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch('/api/upload', { method: 'POST', body: form });
+  // With a sessionId, the file is ADDED to that session as another series
+  // (for comparing e.g. baseline vs follow-up); without it, a new session.
+  const url = sessionId
+    ? `/api/upload?session_id=${encodeURIComponent(sessionId)}`
+    : '/api/upload';
+  const res = await fetch(url, { method: 'POST', body: form });
   const text = await res.text();
   let data;
   try {

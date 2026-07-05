@@ -22,11 +22,19 @@ import RegionThumbnails from './RegionThumbnails';
 
 const UPLOAD_ACCEPT = '.zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp';
 
-function prettySide(s) {
+// Label a side key. Later-series sides are namespaced ("s1/left"); when a
+// `series` list is supplied we prefix the series name so the user always sees
+// WHICH scan a side belongs to (e.g. "follow-up · Left").
+function prettySide(s, series) {
   if (!s) return s;
-  if (s === 'full') return 'Full';
-  if (s === 'mesh') return 'Mesh';
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  const sid = s.includes('/') ? s.split('/')[0] : 's0';
+  const bare = s.includes('/') ? s.split('/').slice(1).join('/') : s;
+  const pretty =
+    bare === 'full' ? 'Full' : bare === 'mesh' ? 'Mesh' : bare.charAt(0).toUpperCase() + bare.slice(1);
+  const entry = (series || []).find((x) => x.id === sid);
+  // Only prefix when there is more than one series to disambiguate.
+  if (entry && (series || []).length > 1) return `${entry.name} · ${pretty}`;
+  return pretty;
 }
 
 export default function ControlPanel({
@@ -102,6 +110,7 @@ export default function ControlPanel({
   });
 
   const sides = session?.sides ?? [];
+  const series = session?.series ?? [];
   const meta = session?.meta ?? {};
   const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
@@ -156,6 +165,42 @@ export default function ControlPanel({
         <p className="panel-hint upload-hint">
           Volumes (.zip DICOM, .nii, .nii.gz) or meshes (.stl, .ply, .obj, .vtp).
         </p>
+
+        {/* Add-series: append a second/third scan (baseline vs follow-up …) to
+            the SAME session so they can be anchored and compared. */}
+        {session && (
+          <>
+            <label className={`add-series-btn${uploading ? ' busy' : ''}`}>
+              <input
+                type="file"
+                accept={UPLOAD_ACCEPT}
+                disabled={uploading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onUpload(f, true);
+                  e.target.value = '';
+                }}
+              />
+              {uploading ? 'Uploading…' : '＋ Add series (baseline / follow-up …)'}
+            </label>
+            {series.length > 1 && (
+              <div className="series-list">
+                <div className="series-list-title">
+                  {series.length} series loaded — anchored against each other:
+                </div>
+                {series.map((s) => (
+                  <div key={s.id} className="series-row" title={s.name}>
+                    <span className="series-tag">{s.id}</span>
+                    <span className="series-name">{s.name}</span>
+                    <span className="series-sides">
+                      {(s.sides || []).map((k) => prettySide(k, null)).join(' · ')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
         {isMesh && (
           <p className="panel-note">
             Mesh upload: thickness (Mode A) needs a CT volume, so this session is
@@ -180,7 +225,7 @@ export default function ControlPanel({
                 onChange={(e) => onReferenceSideChange(e.target.value)}
               >
                 {sides.map((s) => (
-                  <option key={s} value={s}>{prettySide(s)}</option>
+                  <option key={s} value={s}>{prettySide(s, series)}</option>
                 ))}
               </select>
             </label>
@@ -191,7 +236,7 @@ export default function ControlPanel({
                 onChange={(e) => onTargetSideChange(e.target.value)}
               >
                 {sides.map((s) => (
-                  <option key={s} value={s}>{prettySide(s)}</option>
+                  <option key={s} value={s}>{prettySide(s, series)}</option>
                 ))}
               </select>
             </label>
@@ -205,10 +250,18 @@ export default function ControlPanel({
               ⇄ Swap reference / target
             </button>
             <div className="roles-current">
-              Using: <strong>Reference = {prettySide(referenceSide)}</strong> ·{' '}
-              <strong>Target = {prettySide(targetSide)}</strong>
-              {meta.series ? ` · ${meta.series}` : ''}
+              Using: <strong>Reference = {prettySide(referenceSide, series)}</strong> ·{' '}
+              <strong>Target = {prettySide(targetSide, series)}</strong>
+              {series.length <= 1 && meta.series ? ` · ${meta.series}` : ''}
             </div>
+            {series.length > 1 && (
+              <p className="panel-hint roles-hint">
+                Standard: compare the <b>same side across series</b> (e.g.{' '}
+                baseline&nbsp;·&nbsp;Left → follow-up&nbsp;·&nbsp;Left). You can also pick
+                Left vs Right <em>within</em> one series — the labels above always show
+                which scan each side belongs to.
+              </p>
+            )}
           </div>
         )}
       </section>
@@ -223,7 +276,7 @@ export default function ControlPanel({
               className={side === s ? 'active' : ''}
               onClick={() => onSideChange(s)}
             >
-              {prettySide(s)}
+              {prettySide(s, series)}
             </button>
           ))}
           {/* Bilateral scans get a "Both" option that renders left + right
@@ -295,7 +348,7 @@ export default function ControlPanel({
               >
                 {sides.map((s) => (
                   <option key={s} value={s}>
-                    {prettySide(s)}
+                    {prettySide(s, series)}
                   </option>
                 ))}
               </select>
@@ -313,7 +366,7 @@ export default function ControlPanel({
               >
                 {sides.map((s) => (
                   <option key={s} value={s}>
-                    {prettySide(s)}
+                    {prettySide(s, series)}
                   </option>
                 ))}
               </select>

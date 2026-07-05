@@ -203,9 +203,26 @@ export default function App() {
   function applySession(sess) {
     setSession(sess);
     const sides = sess.sides || [];
+    const series = sess.series || [];
     setSide(sides[0] ?? null);
-    setReferenceSide(sides[0] ?? null);
-    setTargetSide(sides[1] ?? sides[0] ?? null);
+    // Default comparison roles. With a single series, compare its two sides
+    // (left vs right). With 2+ series, the STANDARD is to compare the SAME side
+    // across series (baseline·left → follow-up·left), so default to s0's first
+    // side vs the matching side of the next series.
+    if (series.length >= 2) {
+      const ref = series[0].sides?.[0] ?? sides[0] ?? null;
+      const refName = ref ? sideNameOf(ref) : null;
+      const tgt =
+        series[1].sides?.find((k) => sideNameOf(k) === refName) ??
+        series[1].sides?.[0] ??
+        sides[1] ??
+        null;
+      setReferenceSide(ref);
+      setTargetSide(tgt);
+    } else {
+      setReferenceSide(sides[0] ?? null);
+      setTargetSide(sides[1] ?? sides[0] ?? null);
+    }
     setRegionLabel(null);
     setWholeBone(false);
     setNudge(ZERO_NUDGE);
@@ -562,12 +579,30 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [computeSignature]);
 
-  async function onUpload(file) {
+  async function onUpload(file, addToCurrent = false) {
     setUploading(true);
     setComputeError(null);
     try {
-      const sess = await uploadFile(file);
-      applySession(sess);
+      if (addToCurrent && session?.session_id) {
+        // ADD as another series (baseline + follow-up ...). Merge without wiping
+        // the current results; make the new series the comparison target.
+        const res = await uploadFile(file, session.session_id);
+        setSession((prev) => ({
+          ...prev,
+          series: res.series,
+          all_sides: res.all_sides,
+          sides: res.all_sides,
+        }));
+        // Point the target at the just-added series' matching side (cross-series).
+        const added = res.series?.[res.series.length - 1];
+        const refName = referenceSide ? sideNameOf(referenceSide) : 'left';
+        const match = added?.sides?.find((k) => sideNameOf(k) === refName) || added?.sides?.[0];
+        if (match) setTargetSide(match);
+        if (mode === 'B') setModeBView('deviation');
+      } else {
+        const sess = await uploadFile(file);
+        applySession(sess);
+      }
     } catch (e) {
       setComputeError(`Upload failed: ${readableError(e)}`);
     } finally {
@@ -1419,6 +1454,28 @@ export default function App() {
 
 function cap(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// ---- multi-series side-key helpers --------------------------------------
+// A "side key" is either a plain side of the first series ("left"/"right"/
+// "mesh") or a namespaced side of a later series ("s1/left"). These helpers
+// decode the key so the UI can always show WHICH series+side is in play.
+function seriesIdOf(sideKey) {
+  if (!sideKey) return 's0';
+  return sideKey.includes('/') ? sideKey.split('/')[0] : 's0';
+}
+function sideNameOf(sideKey) {
+  if (!sideKey) return sideKey;
+  return sideKey.includes('/') ? sideKey.split('/').slice(1).join('/') : sideKey;
+}
+// Human label for a side key, e.g. "follow-up · Left". `series` is the
+// session.series list (each {id, name, sides}).
+function sideLabelOf(sideKey, series) {
+  const bare = cap(sideNameOf(sideKey));
+  const sid = seriesIdOf(sideKey);
+  const entry = (series || []).find((s) => s.id === sid);
+  const name = entry?.name;
+  return name ? `${name} · ${bare}` : bare;
 }
 
 function readableError(e) {

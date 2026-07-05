@@ -44,8 +44,14 @@ the remeshed surface, not recomputed).</sub>
 
 - **Mode A** segments the bone from its CT density, computes wall thickness at
   every surface point, and colours it with the paper's green→red scale.
-- **Mode B** rebuilds both bones, aligns them (with an optional left/right
-  mirror), and reports a signed surface deviation with per-region statistics.
+- **Mode B** rebuilds two bone surfaces, aligns them (with an optional left/right
+  mirror), and reports a signed surface deviation with per-region statistics. The
+  two surfaces can be the **Left and Right of one scan**, or the **same side of two
+  different scans** — load a **baseline and a follow-up** (or several visits) into
+  one session and compare them: the standard is to anchor each series' Left to the
+  others' Left and Right to Right, and you choose which pair to view. Reference and
+  target are swappable at upload **and** afterwards (swapping flips the sign and the
+  red/green colours), and every panel labels which series·side it is showing.
 
 Everything is interactive and applies in real time:
 
@@ -54,6 +60,13 @@ Everything is interactive and applies in real time:
   by its thumbnail, or view **Left, Right, or both sides together (Bilateral)** —
   the bilateral view loads the **whole bone of each side** (every connected piece,
   not just the largest).
+- **Add more series to compare across visits** — after the first upload, use
+  **＋ Add series** to load a second (or third) scan into the *same* session. Each
+  series keeps its own Left/Right; the panel lists every loaded series and lets you
+  assign the reference and target from any series·side. The bundled demo ships with
+  a baseline and a **de-identified synthetic follow-up** so Mode B's baseline→follow-up
+  comparison works out of the box. (Real second-patient data is never bundled; the
+  follow-up is derived from the de-identified demo by `scripts/make_multi_demo.py`.)
 - **Isolate a bone by clicking it** — turn on **Clip / isolate**, tick *Load whole
   bone (all pieces)*, then **click a piece** on the 3D surface: everything not
   connected to it is hidden, leaving just that bone (e.g. the humerus). *Reset
@@ -449,13 +462,17 @@ expose the same knobs (a test fails the build if they ever drift apart).
 1. **Load** a CT `.zip` (the sample archives wrap a Weasis viewer around a
    `dicom/` folder — the ingest recurses past it), or use the bundled demo scan
    locally. The ingest reports geometry, laterality, and hardware, and splits a
-   bilateral scan into left/right.
+   bilateral scan into left/right. To compare across visits, use **＋ Add series**
+   to load a baseline and one or more follow-ups into the same session.
 2. **Mode A** — pick a side, adjust parameters if you want (they default to the
    paper's values), and Apply. The server re-segments and recomputes the map.
    Region toggles hide non-bone (table, ribs); line/height tools reproduce the
    paper's measurements.
-3. **Mode B** — choose a reference side and a target side, turn on the sagittal
-   mirror for a left/right comparison, and compute. The panel reports the
+3. **Mode B** — choose a **reference** side and a **target** side, then compute.
+   For a single scan, turn on the sagittal mirror to compare left vs right; across
+   series, pick the same side of two series (e.g. baseline·Left → follow-up·Left).
+   The panel labels which series·side each role is, and reference/target are
+   swappable (swapping flips the sign and the red/green colours). It reports the
    registration error, the deviation statistics, and the percent of surface past
    1 mm and 2 mm, split into gain and loss.
 4. **Statistics & figures** — after a compute in either mode, open the

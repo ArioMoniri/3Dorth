@@ -191,7 +191,7 @@ def test_figures_endpoint_returns_base64_pngs(monkeypatch):
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77},
               {"label": 2, "volume_cm3": 12.1, "boneness": 0.44}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 
@@ -225,7 +225,7 @@ def test_figures_endpoint_reuses_analyze_cache(monkeypatch):
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77}]
     calls = {"n": 0}
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         calls["n"] += 1
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
@@ -251,7 +251,7 @@ def test_figures_endpoint_single_region_omits_by_region(monkeypatch):
     mesh = _mesh_with_thickness()
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 
@@ -274,7 +274,7 @@ def test_figures_endpoint_which_filter(monkeypatch):
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77},
               {"label": 2, "volume_cm3": 12.1, "boneness": 0.44}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 
@@ -330,7 +330,7 @@ def test_export_figures_endpoint_validates_dpi_and_formats(monkeypatch):
     mesh = _mesh_with_thickness()
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 
@@ -359,7 +359,7 @@ def test_export_figures_endpoint_writes_png_and_tiff(monkeypatch):
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77},
               {"label": 2, "volume_cm3": 12.1, "boneness": 0.44}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 
@@ -395,7 +395,7 @@ def test_export_figures_endpoint_single_format_single_name(monkeypatch):
     mesh = _mesh_with_thickness()
     regions = [{"label": 1, "volume_cm3": 55.3, "boneness": 0.77}]
 
-    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0), whole_bone=False):
         return {"mesh": mesh, "region_label": 1, "stats": {}, "regions": regions,
                "metal_fraction": 0.0}
 

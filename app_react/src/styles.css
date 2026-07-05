@@ -585,6 +585,68 @@ body {
   display: none;
 }
 
+/* ---- add-series (multi-scan comparison) --------------------------------- */
+.add-series-btn {
+  display: block;
+  text-align: center;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent-2);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--accent-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.add-series-btn:hover { background: #eef0fa; }
+.add-series-btn.busy { opacity: 0.65; cursor: progress; }
+.add-series-btn input[type='file'] { display: none; }
+
+.series-list {
+  margin-top: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fafbff;
+}
+.series-list-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.series-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.series-tag {
+  flex: 0 0 auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.series-name {
+  flex: 1 1 auto;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.series-sides {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* ---- segmented toggles (side / mode B view) ------------------------------ */
 .seg-toggle {
   display: flex;

@@ -13,6 +13,10 @@ DICOM/
 # so every user has something to try. Built by scripts/make_demo.py.
 !data/demo/
 !data/demo/shoulder_demo.nii.gz
+# The DE-IDENTIFIED synthetic follow-up (derived from the demo by
+# scripts/make_multi_demo.py — no real patient data) enables the multi-series
+# (baseline vs follow-up) Mode B demo out of the box.
+!data/demo/shoulder_demo_followup.nii.gz
 
 # ---- Large derived artifacts ----
 outputs/
