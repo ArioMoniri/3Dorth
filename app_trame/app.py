@@ -470,6 +470,10 @@ state.dev_neg_color = "#2166ac"
 _SW = "display:inline-block;width:14px;height:14px;border-radius:3px;flex:none;"
 state.dev_pos_swatch = _SW + "background:#b2182b"
 state.dev_neg_swatch = _SW + "background:#2166ac"
+# Measure tool: click two surface points to read the straight-line mm distance.
+state.measure_mode = False
+state.measure_dist_mm = None
+state.measure_msg = "Click the first point on the surface."
 
 # --- Region thumbnails (visual picker) ------------------------------------ #
 # Small rendered previews per connected bone region, computed via
@@ -1710,6 +1714,90 @@ def _on_hover(point, *_a, **_k):
     state.flush()
 
 
+# --------------------------------------------------------------------------- #
+# Measure tool: click two surface points to read the straight-line mm distance.
+# --------------------------------------------------------------------------- #
+_MEASURE_PTS: list[list[float]] = []
+
+
+def _measure_radius() -> float:
+    try:
+        b = PLOTTER.bounds
+        diag = ((b[1] - b[0]) ** 2 + (b[3] - b[2]) ** 2 + (b[5] - b[4]) ** 2) ** 0.5
+        return max(diag * 0.012, 0.5)
+    except Exception:  # noqa: BLE001
+        return 2.0
+
+
+def _render_measure() -> None:
+    """Draw / refresh the endpoint spheres + connecting line in the 3D scene."""
+    for nm in ("measure_a", "measure_b", "measure_line"):
+        try:
+            PLOTTER.remove_actor(nm)
+        except Exception:  # noqa: BLE001
+            pass
+    r = _measure_radius()
+    try:
+        if len(_MEASURE_PTS) >= 1:
+            PLOTTER.add_mesh(pv.Sphere(radius=r, center=_MEASURE_PTS[0]),
+                             color="#1a7fe6", name="measure_a")
+        if len(_MEASURE_PTS) >= 2:
+            PLOTTER.add_mesh(pv.Sphere(radius=r, center=_MEASURE_PTS[1]),
+                             color="#f08c1a", name="measure_b")
+            PLOTTER.add_mesh(pv.Line(_MEASURE_PTS[0], _MEASURE_PTS[1]),
+                             color="#222222", line_width=4, name="measure_line")
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    if ctrl.view_update:
+        ctrl.view_update()
+
+
+def _on_measure_pick(point) -> None:
+    """Accumulate up to two surface points; a 3rd click starts a fresh pair."""
+    if point is None:
+        return
+    p = [float(point[0]), float(point[1]), float(point[2])]
+    if len(_MEASURE_PTS) >= 2:
+        _MEASURE_PTS.clear()
+    _MEASURE_PTS.append(p)
+    with state:
+        if len(_MEASURE_PTS) == 2:
+            a, b = _MEASURE_PTS
+            d = ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) ** 0.5
+            state.measure_dist_mm = round(d, 2)
+            state.measure_msg = f"{round(d, 2)} mm"
+        else:
+            state.measure_dist_mm = None
+            state.measure_msg = "Click the second point."
+    state.flush()
+    _render_measure()
+
+
+def clear_measure(*_a, **_k) -> None:
+    _MEASURE_PTS.clear()
+    for nm in ("measure_a", "measure_b", "measure_line"):
+        try:
+            PLOTTER.remove_actor(nm)
+        except Exception:  # noqa: BLE001
+            pass
+    with state:
+        state.measure_dist_mm = None
+        state.measure_msg = "Click the first point on the surface."
+    state.flush()
+    if ctrl.view_update:
+        ctrl.view_update()
+
+
+ctrl.clear_measure = clear_measure
+
+
+@state.change("measure_mode")
+def _on_measure_mode(measure_mode, **_k):
+    """Toggling measure off clears the overlay."""
+    if not measure_mode:
+        clear_measure()
+
+
 def _on_pick_to_mpr(point, *_a, **_k):
     """Left-click on the 3D surface -> drive the MPR crosshair (and, when compare
     mode is active, the linked compare crosshair too).
@@ -1719,6 +1807,10 @@ def _on_pick_to_mpr(point, *_a, **_k):
     the picked voxel. Off-surface clicks (point is None) are ignored.
     """
     if point is None:
+        return
+    # Measure mode intercepts the click to drop a measurement endpoint instead.
+    if state.measure_mode:
+        _on_measure_pick(point)
         return
     if state.compare_active:
         _on_pick_to_compare(point)
@@ -2558,6 +2650,18 @@ with SinglePageWithDrawerLayout(server) as layout:
             label="Oblique cross-section (drag the 3D plane)",
             density="compact", hide_details=True, color="primary",
             disabled=("!oblique_available",), style="margin-left:16px;flex:none")
+        v3.VSwitch(
+            v_model=("measure_mode", False),
+            label="Measure (click 2 points → mm)",
+            density="compact", hide_details=True, color="primary",
+            style="margin-left:16px;flex:none")
+        # Measure readout: the distance (or the next-click hint) + a Clear button.
+        with html.Div(v_if="measure_mode", classes="d-flex align-center",
+                      style="margin-left:12px;gap:8px;flex:none"):
+            html.Span("📏 {{ measure_msg }}",
+                      style="font-size:13px;font-weight:600;color:#1a4fd6;white-space:nowrap")
+            v3.VBtn("Clear", size="x-small", variant="tonal", color="primary",
+                    click=ctrl.clear_measure)
         v3.VSpacer()
         # Share URL (copyable) + switch-to-the-other-UI.
         v3.VTextField(

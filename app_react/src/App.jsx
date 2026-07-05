@@ -117,6 +117,9 @@ export default function App() {
   const [isolateResetSeq, setIsolateResetSeq] = useState(0);
   // Bumped by the "Center view" button to reframe the 3D camera on the geometry.
   const [resetViewSeq, setResetViewSeq] = useState(0);
+  // Measure tool: click two surface points to read the straight-line mm distance.
+  const [measureMode, setMeasureMode] = useState(false);
+  const [measurePoints, setMeasurePoints] = useState([]); // up to two [x,y,z]
   const [visibleMask, setVisibleMask] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
@@ -227,6 +230,9 @@ export default function App() {
     setRegionLabel(null);
     setWholeBone(false);
     setNudge(ZERO_NUDGE);
+    // A new scan invalidates any in-progress measurement.
+    setMeasureMode(false);
+    setMeasurePoints([]);
     // A new scan invalidates any cached region previews.
     thumbCacheRef.current = new Map();
     setRegionThumbs(null);
@@ -483,6 +489,22 @@ export default function App() {
   // convert it to voxel indices (the SAME arithmetic the trame path uses), push
   // that crosshair into the MPR, place the 3D marker, and reveal the images.
   const pickSeqRef = useRef(0);
+  // Measure tool: accumulate up to two surface points. A 1st/2nd click builds the
+  // pair; a 3rd click starts a fresh measurement from the new point.
+  function onMeasurePick(worldXyz) {
+    setMeasurePoints((prev) => (prev.length >= 2 ? [worldXyz] : [...prev, worldXyz]));
+  }
+
+  // Straight-line distance (mm) between the two measure points, or null.
+  const measureDistanceMm =
+    measurePoints.length === 2
+      ? Math.hypot(
+          measurePoints[1][0] - measurePoints[0][0],
+          measurePoints[1][1] - measurePoints[0][1],
+          measurePoints[1][2] - measurePoints[0][2],
+        )
+      : null;
+
   async function onSurfacePick(worldXyz, component) {
     // Clip / isolate: when the clip box is on (single side only), clicking a bone
     // isolates the WHOLE connected piece you clicked — the box snaps to that
@@ -1156,7 +1178,10 @@ export default function App() {
             <button
               type="button"
               className={`clip-toggle-btn${clipEnabled ? ' active' : ''}`}
-              onClick={() => onToggleClip(!clipEnabled)}
+              onClick={() => {
+                if (!clipEnabled) { setMeasureMode(false); }
+                onToggleClip(!clipEnabled);
+              }}
               disabled={!displayGeometry || centerView !== 'map' || isBoth}
               title={
                 isBoth
@@ -1167,6 +1192,24 @@ export default function App() {
               }
             >
               {clipEnabled ? 'Clip: On' : 'Clip / isolate'}
+            </button>
+            <button
+              type="button"
+              className={`measure-toggle-btn${measureMode ? ' active' : ''}`}
+              onClick={() => {
+                const next = !measureMode;
+                setMeasureMode(next);
+                if (next && clipEnabled) onToggleClip(false); // clicks can't do both
+                if (!next) setMeasurePoints([]);
+              }}
+              disabled={!displayGeometry || (centerView !== 'map' && centerView !== 'oblique')}
+              title={
+                displayGeometry
+                  ? 'Measure: click two points on the surface to read the straight-line distance in mm'
+                  : 'Compute a thickness or deviation map first'
+              }
+            >
+              {measureMode ? 'Measure: On' : 'Measure'}
             </button>
             <button
               type="button"
@@ -1226,6 +1269,9 @@ export default function App() {
             clipIsolate={clipEnabled && !isBoth}
             isolateResetSeq={isolateResetSeq}
             resetViewSeq={resetViewSeq}
+            measureMode={measureMode}
+            onMeasurePick={onMeasurePick}
+            measurePoints={measurePoints}
           />
 
           {displayGeometry && (
@@ -1235,6 +1281,43 @@ export default function App() {
               mean={activeMean}
               scalarNames={isDeviationView ? deviationResult?.hover_scalars : null}
             />
+          )}
+
+          {measureMode && displayGeometry && (
+            <div className="measure-overlay">
+              <div className="measure-title">📏 Measure (mm)</div>
+              {measureDistanceMm != null ? (
+                <div className="measure-dist">{measureDistanceMm.toFixed(2)} mm</div>
+              ) : (
+                <div className="measure-hint">
+                  {measurePoints.length === 0
+                    ? 'Click the first point on the surface.'
+                    : 'Click the second point.'}
+                </div>
+              )}
+              <div className="measure-actions">
+                <button
+                  type="button"
+                  onClick={() => setMeasurePoints([])}
+                  disabled={!measurePoints.length}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMeasureMode(false);
+                    setMeasurePoints([]);
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+              <div className="measure-note">
+                Straight-line 3D distance between two surface points (not along the
+                surface). Click a third point to start over.
+              </div>
+            </div>
           )}
 
           {clipEnabled && displayGeometry && (

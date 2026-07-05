@@ -27,6 +27,7 @@ import vtkAxesActor from '@kitware/vtk.js/Rendering/Core/AxesActor';
 import vtkOrientationMarkerWidget from '@kitware/vtk.js/Interaction/Widgets/OrientationMarkerWidget';
 import vtkCellPicker from '@kitware/vtk.js/Rendering/Core/CellPicker';
 import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
+import vtkLineSource from '@kitware/vtk.js/Filters/Sources/LineSource';
 import vtkPlaneSource from '@kitware/vtk.js/Filters/Sources/PlaneSource';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
@@ -340,11 +341,18 @@ export default function Viewport({
   clipIsolate = false,
   isolateResetSeq = 0,
   resetViewSeq = 0,
+  measureMode = false,
+  onMeasurePick,
+  measurePoints,
 }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
   const clipIsolateRef = useRef(clipIsolate);
   clipIsolateRef.current = clipIsolate;
+  const measureModeRef = useRef(measureMode);
+  measureModeRef.current = measureMode;
+  const onMeasurePickRef = useRef(onMeasurePick);
+  onMeasurePickRef.current = onMeasurePick;
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
   const onPickRef = useRef(onPick);
@@ -458,6 +466,37 @@ export default function Viewport({
     renderer.addActor(markerActor);
     contextRef.current.markerActor = markerActor;
     contextRef.current.markerSource = markerSource;
+
+    // ---- measure tool: two endpoint spheres + a connecting line ------------
+    // Click two surface points (in Measure mode) to read the straight-line
+    // distance in mm. These actors are driven by the `measurePoints` prop.
+    const mkSphere = (r, g, b) => {
+      const src = vtkSphereSource.newInstance({ radius: 2.0, thetaResolution: 16, phiResolution: 16 });
+      const mp = vtkMapper.newInstance();
+      mp.setInputConnection(src.getOutputPort());
+      const act = vtkActor.newInstance();
+      act.setMapper(mp);
+      act.getProperty().setColor(r, g, b);
+      act.getProperty().setAmbient(0.5);
+      act.setVisibility(false);
+      renderer.addActor(act);
+      return { src, act };
+    };
+    const measureA = mkSphere(0.1, 0.5, 0.95); // point A — blue
+    const measureB = mkSphere(0.95, 0.55, 0.1); // point B — orange
+    const measureLineSource = vtkLineSource.newInstance();
+    const measureLineMapper = vtkMapper.newInstance();
+    measureLineMapper.setInputConnection(measureLineSource.getOutputPort());
+    const measureLineActor = vtkActor.newInstance();
+    measureLineActor.setMapper(measureLineMapper);
+    measureLineActor.getProperty().setColor(0.1, 0.1, 0.1);
+    measureLineActor.getProperty().setLineWidth(3);
+    measureLineActor.getProperty().setAmbient(0.6);
+    measureLineActor.setVisibility(false);
+    renderer.addActor(measureLineActor);
+    Object.assign(contextRef.current, {
+      measureA, measureB, measureLineSource, measureLineActor,
+    });
 
     // ---- oblique cutting-plane actor (Phase VII) ---------------------------
     // A translucent square centred at the plane origin, oriented by the plane
@@ -636,6 +675,13 @@ export default function Viewport({
       if (!ctx || !ctx.actor || !ctx.polydata) return;
       const hit = pickActorAt(e.clientX, e.clientY);
       if (!hit.actor || hit.cellId < 0) return;
+      // ---- Measure mode: a click drops a measurement endpoint on the surface.
+      // Everything else (isolate / MPR pick) is suppressed so the two gestures
+      // never fight. App accumulates the points and computes the mm distance.
+      if (measureModeRef.current) {
+        onMeasurePickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]]);
+        return;
+      }
       // When the click lands on the PRIMARY bone, also report the connected
       // component under the cursor so click-to-isolate can clip to the whole
       // piece (not an axis-box sliver of a diagonal bone).
@@ -1010,6 +1056,39 @@ export default function Viewport({
     }
     ctx.renderWindow?.render();
   }, [marker?.x, marker?.y, marker?.z]);
+
+  // ---- measure tool: place endpoint spheres + connecting line --------------
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.measureA) return;
+    const pts = measurePoints || [];
+    // Size the endpoint spheres relative to the current mesh so they read at any scale.
+    let r = 2.0;
+    if (ctx.polydata) {
+      const b = ctx.polydata.getBounds();
+      const diag = Math.hypot(b[1] - b[0], b[3] - b[2], b[5] - b[4]);
+      if (diag > 0) r = diag * 0.012;
+    }
+    const setSphere = ({ src, act }, p) => {
+      if (p && Number.isFinite(p[0])) {
+        src.setRadius(r);
+        act.setPosition(p[0], p[1], p[2]);
+        act.setVisibility(true);
+      } else {
+        act.setVisibility(false);
+      }
+    };
+    setSphere(ctx.measureA, pts[0]);
+    setSphere(ctx.measureB, pts[1]);
+    if (pts.length >= 2 && pts[0] && pts[1]) {
+      ctx.measureLineSource.setPoint1(pts[0]);
+      ctx.measureLineSource.setPoint2(pts[1]);
+      ctx.measureLineActor.setVisibility(true);
+    } else {
+      ctx.measureLineActor.setVisibility(false);
+    }
+    ctx.renderWindow?.render();
+  }, [measurePoints]);
 
   // ---- move / show / hide the oblique cutting-plane actor ------------------
   // Builds an in-plane basis (u, v) from the normal the same way the server's

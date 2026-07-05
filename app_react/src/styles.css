@@ -2045,6 +2045,56 @@ body {
   border-color: var(--accent-2);
 }
 
+/* Measure toolbar button — same look as the clip toggle. */
+.measure-toggle-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.measure-toggle-btn:disabled { color: var(--text-muted); cursor: not-allowed; background: #f2f2f5; }
+.measure-toggle-btn:not(:disabled):hover { background: #eef0fa; border-color: var(--accent-2); }
+.measure-toggle-btn.active { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
+
+/* Measure readout overlay (bottom-left of the viewport). */
+.measure-overlay {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 6;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  max-width: 260px;
+  font-size: 12px;
+}
+.measure-title { font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+.measure-dist {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent-2);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 6px;
+}
+.measure-hint { color: var(--text-muted); margin-bottom: 6px; }
+.measure-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+.measure-actions button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 5px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.measure-actions button:disabled { color: var(--text-muted); cursor: not-allowed; background: #f2f2f5; }
+.measure-actions button:not(:disabled):hover { background: #eef0fa; border-color: var(--accent-2); }
+.measure-note { color: var(--text-muted); font-size: 10.5px; line-height: 1.35; }
+
 /* ===== Phase V: View in AR / 3D ============================================ */
 .ar-launch-btn {
   border: 1px solid var(--border);
