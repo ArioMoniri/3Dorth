@@ -51,6 +51,14 @@ Everything is interactive and applies in real time:
   from the computed result (a distribution histogram of the active scalar + a
   per-region summary when the data supports it) and exports them as **PNG/TIFF/JPG at
   a chosen DPI**, at parity in both UIs (single-subject/descriptive, labelled as such).
+- **Measure on the CT images** — distance / angle tools on the 2D reformats (mm read
+  from the scan geometry), exported *burned into* the PNG. Click a figure to enlarge
+  it, and **drag/resize** the overlay panels (legend / stats / figures) anywhere.
+- **Smooth, publication surfaces** — a **Surface supersample** mesher resamples the
+  voxel staircase away (the step Mimics/3-matic do) for a clean render, and a
+  **Surface hole-fill** knob bridges small cortex gaps; both are display-only, so the
+  cortical-thickness numbers are still computed on the raw mask. The coloured bone +
+  the discrete Fig-2 colorbar export as PNG/TIFF at any DPI (the paper's Fig-2 layout).
 - **Share** a public link — a resilient tunnel that **auto-selects whatever works from
   your network** (Cloudflare / Pinggy / Tailscale Funnel / serveo / your own relay) and
   survives sleep/wake — and **switch between the two UIs** from either one.
