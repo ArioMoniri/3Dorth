@@ -49,11 +49,23 @@ def health() -> dict:
     return {"status": "ok", "version": app.version}
 
 
-# Native / no-Docker mode: serve the built React SPA from this same process so the
-# whole app runs on ONE port with NO nginx (the UI's /api calls hit these routes on
-# the same origin). Mounted LAST so every /api route above still wins. Set
-# THREEDORTH_STATIC_DIR=app_react/dist (scripts/run_native.sh does this). Ignored by
-# the Docker/K8s deploys, which serve the SPA via nginx.
-_STATIC_DIR = os.environ.get("THREEDORTH_STATIC_DIR", "").strip()
-if _STATIC_DIR and Path(_STATIC_DIR).is_dir():
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")
+# Native / no-Docker mode: serve the built React SPA from THIS process so the whole
+# app runs on ONE port with NO nginx (the UI's /api calls hit the routes above on the
+# same origin). Mounted LAST so every /api route still wins. Reliable WITHOUT any env
+# var: default to <repo>/app_react/dist (absolute, CWD-independent) whenever a build
+# exists; THREEDORTH_STATIC_DIR only overrides the location. The Docker/K8s deploys
+# serve the SPA via nginx and simply have no dist here, so this stays inert for them.
+def _resolve_static_dir() -> Path | None:
+    override = os.environ.get("THREEDORTH_STATIC_DIR", "").strip()
+    candidate = Path(override) if override else (ROOT / "app_react" / "dist")
+    return candidate if (candidate / "index.html").is_file() else None
+
+
+_STATIC_DIR = _resolve_static_dir()
+if _STATIC_DIR is not None:
+    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="ui")
+    print(f"[3Dorth] serving the React UI at / from {_STATIC_DIR}", flush=True)
+else:
+    print("[3Dorth] React UI NOT served at / — no build found at app_react/dist "
+          "(GET / will 404). Build it:  cd app_react && npm run build  "
+          "(scripts/run_native.sh does this automatically).", flush=True)
