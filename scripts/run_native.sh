@@ -63,6 +63,7 @@ for a in "$@"; do case "$a" in
       [ "${a:-}" = y ] && { $APT remove -y $pkgs >/dev/null 2>&1 && ok "apt-removed" || warn "apt remove had issues"; } || warn "kept apt packages"
     fi
     rm -f outputs/public_urls.json outputs/ports.env outputs/api.log outputs/trame.log 2>/dev/null
+    rm -rf outputs/.tunnel "$HOME/.config/ngrok" 2>/dev/null   # ngrok authtoken config
     ok "done. (uploads under data/raw and outputs kept — delete manually if wanted.)"; exit 0 ;;
   *) err "unknown flag: $a"; exit 2 ;;
 esac; done
@@ -199,5 +200,7 @@ fi
 # ---- 8. public tunnel (auto-detects cloudflare/pinggy/ngrok for THIS network) ----
 printf 'REACT_PORT=%s\nTRAME_PORT=%s\nAPI_PORT=%s\n' "$APP_PORT" "$TRAME_PORT" "$APP_PORT" > outputs/ports.env
 [ -n "$appok" ] || exit 1
+# shellcheck disable=SC1091
+. ./scripts/setup_tunnel_token.sh    # optionally set up ngrok (stable, no time limit)
 echo; step "Opening a public link (auto-picks a tunnel that works from here; Ctrl-C stops it, app keeps running)…"
 exec ./scripts/tunnel.sh "$APP_PORT" "$TRAME_PORT"
