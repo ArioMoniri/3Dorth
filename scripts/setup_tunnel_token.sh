@@ -10,8 +10,16 @@ NG="$(_ng)"
 if [ -n "$NG" ] && "$NG" config check >/dev/null 2>&1; then
   export TUNNEL_PROVIDER="${TUNNEL_PROVIDER:-ngrok}"          # already good -> prefer it
 else
+  # Some pods allowlist egress and block ngrok's host — don't offer ngrok if we can't
+  # even reach its download endpoint (Pinggy will be used instead).
+  _ngrok_reachable=1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 5 bash -c "exec 3<>/dev/tcp/bin.equinox.io/443" 2>/dev/null || _ngrok_reachable=0
+  fi
   TOKEN="${NGROK_AUTHTOKEN:-}"
-  if [ -z "$TOKEN" ] && [ -t 0 ]; then
+  if [ -z "$TOKEN" ] && [ "$_ngrok_reachable" = 0 ]; then
+    echo "  ${DIM:-}ngrok's host is unreachable from this pod (egress-blocked) — using the free Pinggy tunnel.${RST:-}"
+  elif [ -z "$TOKEN" ] && [ -t 0 ]; then
     printf "\n"
     printf "  ${BOLD:-}Public link — token (optional):${RST:-}\n"
     printf "    • ${BOLD:-}Enter${RST:-}  → free ${BOLD:-}Pinggy${RST:-} tunnel (no signup; 60-min sessions + a visitor splash page)\n"
