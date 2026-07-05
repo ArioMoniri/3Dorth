@@ -47,8 +47,13 @@ Everything is interactive and applies in real time:
 - **Hover** the surface for the per-point value; **export** PNG/TIFF (with a DPI),
   STL/PLY/OBJ/VTP, or DICOM with a camera pose; **Mode B** adds a manual-anchor
   nudge and a reference/target swap.
-- **Share** a public link (a resilient Cloudflare tunnel that survives sleep/wake)
-  and **switch between the two UIs** from either one.
+- **Statistics & figures** — a collapsible section renders publication-style plots
+  from the computed result (a distribution histogram of the active scalar + a
+  per-region summary when the data supports it) and exports them as **PNG/TIFF/JPG at
+  a chosen DPI**, at parity in both UIs (single-subject/descriptive, labelled as such).
+- **Share** a public link — a resilient tunnel that **auto-selects whatever works from
+  your network** (Cloudflare / Pinggy / Tailscale Funnel / serveo / your own relay) and
+  survives sleep/wake — and **switch between the two UIs** from either one.
 
 ### See the images, not just the surface
 
@@ -108,7 +113,7 @@ git clone https://github.com/ArioMoniri/3Dorth.git ~/3dorth && cd ~/3dorth
     1) Kubernetes   2) Docker   3) Native   4) Re-scan   5) Uninstall   6) Quit
 ```
 
-It picks between four paths (all end in one public Cloudflare link, no inbound port needed):
+It picks between four paths (all end in one public link — an auto-selected tunnel, no inbound port needed):
 - **Kubernetes** (`deploy_k8s.sh`) — GPU + autoscale, builds on-cluster.
 - **Docker single-pod** (`deploy_restricted.sh`) — for non-privileged RKE2 pods.
 - **Native, no Docker** (`run_native.sh`) — for bare containers where `dockerd` won't
@@ -388,6 +393,10 @@ expose the same knobs (a test fails the build if they ever drift apart).
    mirror for a left/right comparison, and compute. The panel reports the
    registration error, the deviation statistics, and the percent of surface past
    1 mm and 2 mm, split into gain and loss.
+4. **Statistics & figures** — after a compute in either mode, open the
+   **Statistics & figures** section for the distribution histogram + per-region
+   summary, and export them as PNG/TIFF/JPG at a chosen DPI. **Reset to defaults**
+   restores the registry defaults for the current mode.
 
 </details>
 
@@ -442,7 +451,7 @@ reproduced below.
 ```bash
 uv venv --python 3.12 .venv
 uv pip install -r requirements.txt
-make test                    # 80+ tests
+make test                    # 190+ tests
 python scripts/watchdog.py   # independent verification, should be GREEN
 
 # then, in three terminals:
