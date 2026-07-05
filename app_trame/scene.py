@@ -49,11 +49,17 @@ def _apply_view(plotter: pv.Plotter, params) -> None:
     plotter.camera_position = "xz"
 
 
-def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=""):
-    """Render a single cortical-thickness surface (Mode A, or one side of Mode B).
+def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label="",
+                          second_mesh=None):
+    """Render a cortical-thickness surface (Mode A, or one side of Mode B).
 
     ``mesh`` is a live ``pyvista`` surface carrying a ``thickness_mm`` point
     scalar (as returned by ``core.pipeline.analyze_thickness``).
+
+    When ``second_mesh`` is given (the bilateral "Both" view), a SECOND thickness
+    surface is added in the same scene, coloured by its own ``thickness_mm`` with
+    the identical LUT/clim, and only one shared scalar bar is shown — so left and
+    right read on one legend. Each mesh keeps its own per-vertex thickness.
     """
     params = params or P.default_parameters()
     plotter.clear()
@@ -64,12 +70,14 @@ def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=
     if side_label:
         title = f"{side_label} — cortical thickness (mm)"
 
+    cmap = get_cmap(params.mode_a_colormap, params.mode_a_colormap_reverse)
+    clim = [params.mode_a_range_min, params.mode_a_range_max]
     plotter.add_mesh(
         mesh,
         scalars="thickness_mm",
-        cmap=get_cmap(params.mode_a_colormap, params.mode_a_colormap_reverse),
+        cmap=cmap,
         n_colors=params.mode_a_colorbar_steps,
-        clim=[params.mode_a_range_min, params.mode_a_range_max],
+        clim=clim,
         smooth_shading=True,
         scalar_bar_args=dict(
             title=title, vertical=True,
@@ -79,6 +87,18 @@ def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=
             italic=False, bold=False, font_family="arial",
         ),
     )
+    if second_mesh is not None:
+        # Second bone, same LUT; suppress its scalar bar (the first one covers
+        # both since the clim/colormap are shared).
+        plotter.add_mesh(
+            second_mesh,
+            scalars="thickness_mm",
+            cmap=cmap,
+            n_colors=params.mode_a_colorbar_steps,
+            clim=clim,
+            smooth_shading=True,
+            show_scalar_bar=False,
+        )
     _apply_view(plotter, params)
     return plotter
 

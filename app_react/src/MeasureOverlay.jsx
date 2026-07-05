@@ -18,8 +18,21 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 let _uid = 0;
 const nextId = () => `m${(_uid += 1)}`;
 
+// Normalised (unitless) point distance — used for the angle tool, which is
+// scale-free in the SQUARE-pixel image space the reformats are rendered in.
 function dist2d(a, b) {
   return Math.hypot(a.nx - b.nx, a.ny - b.ny);
+}
+
+// Physical distance in mm between two normalised points, given the image's
+// physical span along each axis. For a square reformat spanX === spanY === the
+// oblique `sizeMm`; for an MPR slice the two in-plane axes can differ, so we
+// scale each normalised delta by its own axis span (never assume square).
+function distMm(a, b, spanXMm, spanYMm) {
+  if (!Number.isFinite(spanXMm) || !Number.isFinite(spanYMm)) return null;
+  const dx = (a.nx - b.nx) * spanXMm;
+  const dy = (a.ny - b.ny) * spanYMm;
+  return Math.hypot(dx, dy);
 }
 
 // angle at p1 (degrees) between p0 and p2, in normalised (square) space
@@ -34,7 +47,9 @@ function angleDeg(p0, p1, p2) {
 
 export default function MeasureOverlay({
   rect,          // { left, top, w, h } of the displayed image within the box (px)
-  sizeMm,        // physical span of the square reformat (mm across the full image)
+  sizeMm,        // physical span of a SQUARE reformat (mm); used when spanX/Y omitted
+  spanXMm,       // physical width of the image in mm (defaults to sizeMm — square)
+  spanYMm,       // physical height of the image in mm (defaults to sizeMm — square)
   active,        // measure mode on/off — when off the overlay is fully inert
   unitLabel = 'distance', // label for the distance tool ("thickness" / "height" / "distance")
   measures,
@@ -63,7 +78,10 @@ export default function MeasureOverlay({
     (p) => (rect ? { x: rect.left + p.nx * rect.w, y: rect.top + p.ny * rect.h } : { x: 0, y: 0 }),
     [rect],
   );
-  const mm = useCallback((d) => (Number.isFinite(sizeMm) ? d * sizeMm : null), [sizeMm]);
+  // Physical spans: default to the square `sizeMm` for both axes (oblique
+  // reformats are square); MPR slices pass explicit per-axis spans.
+  const spanX = Number.isFinite(spanXMm) ? spanXMm : sizeMm;
+  const spanY = Number.isFinite(spanYMm) ? spanYMm : sizeMm;
 
   function onDown(e) {
     if (!active || !rect) return;
@@ -135,7 +153,7 @@ export default function MeasureOverlay({
           const val = angleDeg(m.pts[0], m.pts[1], m.pts[2]);
           label = { at: px[1], text: `${val.toFixed(1)}°` };
         } else if (m.type === 'distance' && m.pts.length === 2) {
-          const d = mm(dist2d(m.pts[0], m.pts[1]));
+          const d = distMm(m.pts[0], m.pts[1], spanX, spanY);
           const mid = { x: (px[0].x + px[1].x) / 2, y: (px[0].y + px[1].y) / 2 };
           label = { at: mid, text: d == null ? '—' : `${d.toFixed(2)} mm` };
         }
@@ -190,8 +208,14 @@ export default function MeasureOverlay({
   );
 }
 
-// Composite the reformat <img> + the measurements onto a canvas and download a PNG.
-export function exportWithMeasures(imgEl, measures, sizeMm, unitLabel, filename = 'measured.png') {
+// Composite the reformat <img> + the measurements onto a canvas and download a
+// PNG. `sizeMm` is the SQUARE span; pass `spans = {x, y}` for a non-square MPR
+// slice so the burned-in mm labels match the on-screen ones exactly.
+export function exportWithMeasures(
+  imgEl, measures, sizeMm, unitLabel, filename = 'measured.png', spans = null,
+) {
+  const spanX = spans && Number.isFinite(spans.x) ? spans.x : sizeMm;
+  const spanY = spans && Number.isFinite(spans.y) ? spans.y : sizeMm;
   if (!imgEl || !imgEl.naturalWidth) return;
   const W = imgEl.naturalWidth;
   const H = imgEl.naturalHeight;
@@ -217,8 +241,8 @@ export function exportWithMeasures(imgEl, measures, sizeMm, unitLabel, filename 
       text = `${angleDeg(m.pts[0], m.pts[1], m.pts[2]).toFixed(1)}°`;
       at = px[1];
     } else if (m.type === 'distance' && px.length === 2) {
-      const d = sizeMm * dist2d(m.pts[0], m.pts[1]);
-      text = `${(m.unitLabel === 'distance' ? '' : m.unitLabel + ' ')}${d.toFixed(2)} mm`;
+      const d = distMm(m.pts[0], m.pts[1], spanX, spanY);
+      text = `${(m.unitLabel === 'distance' ? '' : m.unitLabel + ' ')}${(d ?? 0).toFixed(2)} mm`;
       at = { x: (px[0].x + px[1].x) / 2, y: (px[0].y + px[1].y) / 2 };
     }
     if (text && at) {

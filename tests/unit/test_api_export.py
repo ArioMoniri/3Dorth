@@ -149,3 +149,37 @@ def test_compare_accepts_manual_transform_field():
     assert req.manual_transform is not None
     # backward compatible: default is None
     assert CompareReq().manual_transform is None
+
+
+def test_export_endpoint_accepts_annotate(monkeypatch):
+    """The /export body accepts an optional Fig-2 `annotate` dict, and it flows
+    into the bundle (patched to a tiny mesh so no heavy compute runs)."""
+    from api.routers.session import ExportReq
+    # field exists and defaults to None (backward compatible)
+    assert ExportReq().annotate is None
+    req = ExportReq(annotate={"sampling_line": True, "height": {"axis": "z"}})
+    assert req.annotate == {"sampling_line": True, "height": {"axis": "z"}}
+
+    from core.meshing import mask_to_mesh
+    mask = np.zeros((24, 20, 20), dtype=bool)
+    mask[3:21, 5:15, 5:15] = True
+    mesh = mask_to_mesh(mask, (1.0, 1.0, 1.0), smooth_iters=0)
+    mesh["thickness_mm"] = np.linspace(0.5, 5.0, mesh.n_points)
+
+    def fake_analyze(arr, spacing, params, region_label=None, offset_xyz=(0, 0, 0)):
+        return {"mesh": mesh, "region_label": 1, "stats": {},
+                "regions": [], "metal_fraction": 0.0}
+
+    monkeypatch.setattr(session_router.pipeline, "analyze_thickness", fake_analyze)
+    sid = "expannot1"
+    session_router.SESSIONS[sid] = {
+        "arr": None, "spacing": (1.0, 1.0, 1.0), "meta": {"format": "test"},
+        "sides": {"full": {"arr": mask.astype(np.float32), "spacing": (1.0, 1.0, 1.0),
+                           "offset_xyz": (0.0, 0.0, 0.0), "side": "full"}},
+    }
+    r = CLIENT.post(f"/api/session/{sid}/export",
+                    json={"mode": "A", "side": "full", "formats": ["png"], "dpi": 100,
+                          "annotate": {"sampling_line": True, "height": True}})
+    assert r.status_code == 200, r.text
+    got = CLIENT.get(r.json()["files"]["png"])
+    assert got.status_code == 200 and len(got.content) > 5000

@@ -58,7 +58,7 @@ from app_trame.scene import build_deviation_scene, build_thickness_scene  # noqa
 from core import pipeline  # noqa: E402
 from core.export import export_bundle  # noqa: E402
 from core.ingest import is_mesh  # noqa: E402
-from core.stats.figures import render_result_figures  # noqa: E402
+from core.stats.figures import descriptive_stats, render_result_figures  # noqa: E402
 
 pv.OFF_SCREEN = True
 
@@ -97,7 +97,7 @@ PLOTTER = pv.Plotter(off_screen=True)
 SESSION: dict = {"arr": None, "spacing": None, "meta": None, "sides": {},
                  "is_mesh": False}
 _LOCK = threading.Lock()
-_LAST_MESH = {"thickness": None, "deviation": None}
+_LAST_MESH = {"thickness": None, "deviation": None, "thickness_second": None}
 # Region list from the last Mode-A thickness compute ([{label, volume_cm3,
 # boneness}], see core.pipeline.analyze_thickness) — feeds the per-region
 # statistics figure. Mode B has no per-region breakdown (single registered
@@ -179,13 +179,24 @@ def _refresh_session_ui() -> None:
     labels = {"left": "Left", "right": "Right", "full": "Full", "mesh": "Mesh"}
     opts = [{"title": labels.get(n, n.capitalize()), "value": n} for n in names]
     bilateral = set(names) == {"left", "right"}
+    # Bilateral scans get a "Both" thickness option that renders left + right
+    # together (each coloured by its own cortical thickness). UI-only side value.
+    # It is offered ONLY on the thickness-side selector (side_thickness_options),
+    # never on the reference/target selectors (which need a single side each).
+    both_allowed = bilateral and not is_mesh_sess
+    thickness_opts = opts + (
+        [{"title": "Both (left + right)", "value": "both"}] if both_allowed else []
+    )
 
     state.side_options = opts
+    state.side_thickness_options = thickness_opts
     state.session_sides = names
     state.is_mesh_session = is_mesh_sess
     state.is_bilateral = bilateral
-    # Keep the active selectors valid for the current session.
-    if state.side not in names:
+    # Keep the active selectors valid for the current session. 'both' is a valid
+    # thickness selection on a bilateral volume session.
+    valid_sides = names + (["both"] if both_allowed else [])
+    if state.side not in valid_sides:
         state.side = names[0] if names else "full"
     if bilateral:
         state.ref_side, state.tgt_side = "left", "right"
@@ -330,6 +341,11 @@ state.stats_html = ""
 state.meta_html = ""
 state.side_options = [{"title": "Left", "value": "left"},
                       {"title": "Right", "value": "right"}]
+# Thickness-side selector options (adds the bilateral "Both" entry when it
+# applies); the ref/target selectors use side_options above (single side each).
+state.side_thickness_options = [{"title": "Left", "value": "left"},
+                                {"title": "Right", "value": "right"},
+                                {"title": "Both (left + right)", "value": "both"}]
 state.session_sides = ["left", "right"]
 state.is_mesh_session = False
 state.is_bilateral = True
@@ -372,6 +388,10 @@ state.histogram_bins = {"counts": [], "edges": [], "n": 0}
 # trame and React UIs stay byte-for-byte identical for a given scalar array.
 state.stats_figures = {}          # {name: data:image/png;base64,...}
 state.stats_figures_note = ""     # honesty-rail caption (single-subject/descriptive)
+# Descriptive stats block (percentiles / IQR / %>1mm / %>2mm) — the same numbers
+# the API's /figures endpoint returns and the Table-1 figure renders. Surfaced as
+# a compact table so the trame UI matches React's stats section.
+state.stats_descriptive = {}      # {scalar, n, mean, median, sd, p5..p95, iqr, ...}
 state.figures_export_formats = ["png"]
 state.figures_export_format_choices = ["png", "tiff", "jpg"]
 state.figures_export_dpi = 300
@@ -405,6 +425,11 @@ state.cam_zoom = 1.0
 state.export_busy = False
 state.export_msg = ""
 state.export_links = []          # [{fmt, url}]
+# Fig-2 measurement annotations for the RASTER export (auto-placed at the
+# surgical-neck / lesser-tuberosity base). Sampled thickness is read off the
+# computed scalar server-side (never fabricated); descriptive / single-subject.
+state.annotate_line = False       # overlay the cortical-thickness sampling line
+state.annotate_height = False     # overlay the height bracket
 
 # --- Phase V: AR asset export (GLB) --------------------------------------- #
 state.ar_glb_busy = False
@@ -1367,6 +1392,7 @@ def refresh_stats_figures(*_a, **_k) -> None:
         with state:
             state.stats_figures = {}
             state.stats_figures_note = ""
+            state.stats_descriptive = {}
         state.flush()
         return
 
@@ -1387,15 +1413,20 @@ def refresh_stats_figures(*_a, **_k) -> None:
         elif diverging:
             note += (" 'By-region' omitted: Mode B has one registered surface "
                     "(no per-region breakdown).")
+        # Descriptive stat block (percentiles / IQR / %>1mm / %>2mm) — same
+        # numbers the API's /figures endpoint returns and the Table-1 figure shows.
+        stats_block = descriptive_stats(values, scalar_name=key)
         with state:
             state.stats_figures = encoded
             state.stats_figures_note = note
+            state.stats_descriptive = stats_block
         state.flush()
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         with state:
             state.stats_figures = {}
             state.stats_figures_note = f"Figures failed: {e}"
+            state.stats_descriptive = {}
         state.flush()
 
 
@@ -1670,37 +1701,75 @@ def _compute_worker(req_id: int | None = None):
                     "This is a surface mesh — thickness needs a volume. "
                     "Use Mode B deviation instead.")
             side_key = state.side
-            side = sides.get(side_key)
-            if side is None:
-                raise RuntimeError(f"Unknown side '{side_key}'.")
-            region_label = state.region_label
-            try:
-                region_label = int(region_label) if region_label is not None else None
-            except (TypeError, ValueError):
-                region_label = None
-            res = pipeline.analyze_thickness(
-                side["arr"], side["spacing"], params,
-                region_label=region_label, offset_xyz=side["offset_xyz"],
-            )
-            _LAST_MESH["thickness"] = res["mesh"]
             global _LAST_REGIONS
-            _LAST_REGIONS = res.get("regions")
-            # Adopt the server's chosen region so the picker reflects reality,
-            # WITHOUT re-triggering a recompute (only change when it differs).
-            picked = res.get("region_label")
-            if picked is not None and state.region_label != picked:
-                state.region_label = picked
-            build_thickness_scene(PLOTTER, res["mesh"], params=params,
-                                  side_label=_side_label(side_key))
-            s = res["stats"]
-            html_out = _meta_html() + _stat_rows(
-                f"Thickness — {_side_label(side_key)} (mm)",
-                [("mean", f"{s['mean']:.3f}"), ("median", f"{s['median']:.3f}"),
-                 ("sd", f"{s['sd']:.3f}"), ("min", f"{s['min']:.3f}"),
-                 ("max", f"{s['max']:.3f}"), ("n vertices", f"{s['n']:,}")],
-            ) + _stat_rows("Segmentation",
-                           [("region label", str(res["region_label"])),
-                            ("metal fraction", f"{res['metal_fraction']:.4f}")])
+            if side_key == "both":
+                # Bilateral "Both": compute LEFT + RIGHT (whole bone each) and
+                # render the two thickness meshes together. The primary (left)
+                # drives the stats / histogram / figures exactly like a single
+                # side; the right is the second mesh in the scene.
+                left = sides.get("left")
+                right = sides.get("right")
+                if left is None or right is None:
+                    raise RuntimeError("Both view needs a left and a right side.")
+                res = pipeline.analyze_thickness(
+                    left["arr"], left["spacing"], params,
+                    offset_xyz=left["offset_xyz"],
+                )
+                res_r = pipeline.analyze_thickness(
+                    right["arr"], right["spacing"], params,
+                    offset_xyz=right["offset_xyz"],
+                )
+                _LAST_MESH["thickness"] = res["mesh"]
+                _LAST_MESH["thickness_second"] = res_r["mesh"]
+                _LAST_REGIONS = res.get("regions")
+                build_thickness_scene(PLOTTER, res["mesh"], params=params,
+                                      side_label="Left + Right",
+                                      second_mesh=res_r["mesh"])
+                s = res["stats"]
+                sr = res_r["stats"]
+                html_out = _meta_html() + _stat_rows(
+                    "Thickness — Left (mm)",
+                    [("mean", f"{s['mean']:.3f}"), ("median", f"{s['median']:.3f}"),
+                     ("sd", f"{s['sd']:.3f}"), ("min", f"{s['min']:.3f}"),
+                     ("max", f"{s['max']:.3f}"), ("n vertices", f"{s['n']:,}")],
+                ) + _stat_rows(
+                    "Thickness — Right (mm)",
+                    [("mean", f"{sr['mean']:.3f}"), ("median", f"{sr['median']:.3f}"),
+                     ("sd", f"{sr['sd']:.3f}"), ("min", f"{sr['min']:.3f}"),
+                     ("max", f"{sr['max']:.3f}"), ("n vertices", f"{sr['n']:,}")],
+                )
+            else:
+                side = sides.get(side_key)
+                if side is None:
+                    raise RuntimeError(f"Unknown side '{side_key}'.")
+                region_label = state.region_label
+                try:
+                    region_label = int(region_label) if region_label is not None else None
+                except (TypeError, ValueError):
+                    region_label = None
+                res = pipeline.analyze_thickness(
+                    side["arr"], side["spacing"], params,
+                    region_label=region_label, offset_xyz=side["offset_xyz"],
+                )
+                _LAST_MESH["thickness"] = res["mesh"]
+                _LAST_MESH["thickness_second"] = None  # single-side: no second bone
+                _LAST_REGIONS = res.get("regions")
+                # Adopt the server's chosen region so the picker reflects reality,
+                # WITHOUT re-triggering a recompute (only change when it differs).
+                picked = res.get("region_label")
+                if picked is not None and state.region_label != picked:
+                    state.region_label = picked
+                build_thickness_scene(PLOTTER, res["mesh"], params=params,
+                                      side_label=_side_label(side_key))
+                s = res["stats"]
+                html_out = _meta_html() + _stat_rows(
+                    f"Thickness — {_side_label(side_key)} (mm)",
+                    [("mean", f"{s['mean']:.3f}"), ("median", f"{s['median']:.3f}"),
+                     ("sd", f"{s['sd']:.3f}"), ("min", f"{s['min']:.3f}"),
+                     ("max", f"{s['max']:.3f}"), ("n vertices", f"{s['n']:,}")],
+                ) + _stat_rows("Segmentation",
+                               [("region label", str(res["region_label"])),
+                                ("metal fraction", f"{res['metal_fraction']:.4f}")])
         else:  # Mode B deviation
             ref = sides.get(state.ref_side)
             tgt = sides.get(state.tgt_side)
@@ -1841,6 +1910,10 @@ def apply_display_only(*_a, **_k):
     try:
         if diverging:
             build_deviation_scene(PLOTTER, mesh, params=params)
+        elif state.side == "both":
+            build_thickness_scene(PLOTTER, mesh, params=params,
+                                  side_label="Left + Right",
+                                  second_mesh=_LAST_MESH["thickness_second"])
         else:
             build_thickness_scene(PLOTTER, mesh, params=params,
                                   side_label=_side_label(state.side))
@@ -1978,19 +2051,32 @@ def _export_worker():
             if is_mesh_sess:
                 raise RuntimeError(
                     "Thickness export needs a volume; this is a surface mesh.")
-            side = sides.get(state.side)
+            # The raster/mesh bundle renders ONE surface; in the bilateral 'both'
+            # view we export the primary (left) side.
+            side_key = "left" if state.side == "both" else state.side
+            side = sides.get(side_key)
             if side is None:
-                raise RuntimeError(f"Unknown side '{state.side}'.")
+                raise RuntimeError(f"Unknown side '{side_key}'.")
             res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
                                              offset_xyz=side["offset_xyz"])
             mesh, scalar = res["mesh"], "thickness_mm"
+
+        # Fig-2 measurement overlays (raster/DICOM only) — auto-placed. Only
+        # meaningful for the thickness surface, mirroring React's annotateApplies.
+        annotate = None
+        if not diverging and (state.annotate_line or state.annotate_height):
+            annotate = {}
+            if state.annotate_line:
+                annotate["sampling_line"] = True
+            if state.annotate_height:
+                annotate["height"] = True
 
         key = uuid.uuid4().hex[:12]
         out_dir = EXPORTS_DIR / key
         files = export_bundle(mesh, scalar, params, out_dir,
                               formats=tuple(f.lower() for f in formats),
                               dpi=dpi, camera=_camera_from_state(),
-                              diverging=diverging, stem="export")
+                              diverging=diverging, stem="export", annotate=annotate)
         links = [{"fmt": fmt, "url": f"/downloads/{key}/{Path(p).name}"}
                  for fmt, p in files.items()]
         with state:
@@ -2252,10 +2338,16 @@ with SinglePageWithDrawerLayout(server) as layout:
         with v3.VCard(flat=True, classes="pa-2"):
             # ---- Session: side + Mode B sub-view + Apply ---------------------
             v3.VCardTitle("Session", classes="text-subtitle-1 pb-1")
-            v3.VSelect(v_model=("side",), items=("side_options",),
+            v3.VSelect(v_model=("side",), items=("side_thickness_options",),
                        label="Side (thickness view)", density="compact",
                        hide_details=True, variant="outlined",
                        disabled=("is_mesh_session",))
+            html.Div(
+                "Both view: left and right are rendered together, each coloured "
+                "by its own cortical thickness. The stats/figures below describe "
+                "the LEFT side; hover either bone to read its thickness.",
+                v_if="side === 'both'",
+                style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
             html.Div(
                 "Surface mesh loaded — cortical thickness needs a volume, so "
                 "Mode A is disabled. Use Mode B (comparison / viewing).",
@@ -2282,7 +2374,8 @@ with SinglePageWithDrawerLayout(server) as layout:
             # shows a small rendered preview + volume/boneness; clicking one
             # selects it and recomputes. The text side-selector above still works.
             with html.Div(
-                v_if="!is_mesh_session && !(mode === 'B' && b_view === 'deviation')",
+                v_if="!is_mesh_session && !(mode === 'B' && b_view === 'deviation') "
+                     "&& side !== 'both'",
                 classes="mt-3"):
                 v3.VCardSubtitle("Region (click a preview to select)",
                                  classes="px-0 pb-1")
@@ -2513,14 +2606,46 @@ with SinglePageWithDrawerLayout(server) as layout:
                         v_if="!Object.keys(stats_figures).length",
                         style="font-size:12px;color:#888")
 
+                    # Descriptive stat block (n, mean±SD, median, IQR, percentiles,
+                    # %>1mm / %>2mm) — the same numbers the API's /figures endpoint
+                    # returns, surfaced as a compact table (parity with React).
+                    with html.Div(
+                        v_if="stats_descriptive && stats_descriptive.n",
+                        style="background:#fafafa;border:1px solid #eee;"
+                              "border-radius:6px;padding:8px;margin-bottom:8px"):
+                        html.Div(
+                            "Descriptive statistics (single-subject)",
+                            style="font-size:11px;font-weight:700;letter-spacing:.04em;"
+                                  "text-transform:uppercase;color:#333;margin-bottom:4px")
+                        html.Div(
+                            "n {{ stats_descriptive.n }} · mean "
+                            "{{ stats_descriptive.mean }} ± {{ stats_descriptive.sd }} · "
+                            "median {{ stats_descriptive.median }} · IQR "
+                            "{{ stats_descriptive.iqr }}",
+                            style="font-size:11px;color:#555;line-height:1.6")
+                        html.Div(
+                            "p5 {{ stats_descriptive.p5 }} · p25 {{ stats_descriptive.p25 }} · "
+                            "p75 {{ stats_descriptive.p75 }} · p95 {{ stats_descriptive.p95 }}",
+                            style="font-size:11px;color:#555;line-height:1.6")
+                        html.Div(
+                            "min {{ stats_descriptive.min }} · max {{ stats_descriptive.max }} · "
+                            "RMS {{ stats_descriptive.rms }}",
+                            style="font-size:11px;color:#555;line-height:1.6")
+                        html.Div(
+                            ">1 mm {{ stats_descriptive.pct_over_1mm }}% · "
+                            ">2 mm {{ stats_descriptive.pct_over_2mm }}%",
+                            style="font-size:11px;color:#555;line-height:1.6")
+
                     with html.Template(
                             v_for="(img, name) in stats_figures", key="name"):
                         with html.Div(
                             style="background:#fafafa;border:1px solid #eee;"
                                   "border-radius:6px;padding:8px;margin-bottom:8px"):
                             html.Div(
-                                "{{ name === 'histogram' ? 'Distribution' : "
-                                "'Per-region summary' }}",
+                                "{{ ({histogram:'Distribution histogram', "
+                                "ecdf:'Cumulative distribution (ECDF)', "
+                                "table:'Descriptive table (Table 1)', "
+                                "by_region:'Per-region summary'})[name] || name }}",
                                 style="font-size:11px;font-weight:700;"
                                       "letter-spacing:.04em;text-transform:uppercase;"
                                       "color:#333;margin-bottom:4px")
@@ -2582,6 +2707,31 @@ with SinglePageWithDrawerLayout(server) as layout:
                         v_model=("export_dpi",), label="DPI (raster)",
                         type="number", density="compact", hide_details=True,
                         variant="outlined", classes="mb-2")
+                    # Fig-2 measurement overlays (raster/DICOM only). Auto-placed
+                    # at the surgical-neck / lesser-tuberosity base; sampled
+                    # thickness is read off the computed map, never fabricated.
+                    # Only shown for the thickness view (not Mode B deviation).
+                    with html.Div(
+                        v_if="!(mode === 'B' && b_view === 'deviation')",
+                        classes="mb-1"):
+                        html.Div("Fig-2 measurement overlays",
+                                 style="font-size:11px;font-weight:700;color:#333;"
+                                       "margin:4px 0")
+                        v3.VSwitch(
+                            v_model=("annotate_line",),
+                            label="Cortical-thickness sampling line",
+                            density="compact", hide_details=True, color="primary")
+                        v3.VSwitch(
+                            v_model=("annotate_height",),
+                            label="Height bracket",
+                            density="compact", hide_details=True, color="primary")
+                        html.Div(
+                            "Auto-placed at the surgical-neck / lesser-tuberosity "
+                            "base. Sampled thickness is read off the computed map "
+                            "(never fabricated); descriptive / single-subject. "
+                            "Applies to raster (PNG/TIFF/JPG) + the DICOM SC.",
+                            style="font-size:10px;color:#888;margin:2px 0 6px;"
+                                  "line-height:1.4")
                     html.Div("Camera pose",
                              style="font-size:11px;font-weight:700;color:#333;margin:4px 0")
                     v3.VSlider(v_model=("cam_azimuth",), label="azimuth°",

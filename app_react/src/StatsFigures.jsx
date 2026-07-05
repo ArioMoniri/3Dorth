@@ -18,6 +18,8 @@ const RASTER_FORMATS = ['png', 'tiff', 'jpg'];
 
 const FIGURE_TITLES = {
   histogram: 'Distribution histogram',
+  ecdf: 'Cumulative distribution (ECDF)',
+  table: 'Descriptive table (Table 1)',
   by_region: 'Per-region summary',
 };
 
@@ -38,6 +40,7 @@ export default function StatsFigures({
   const [error, setError] = useState(null);
   const [figures, setFigures] = useState(null); // { name: base64 png }
   const [note, setNote] = useState(null);
+  const [stats, setStats] = useState(null); // descriptive stat block from /figures
   const [zoomed, setZoomed] = useState(null); // { name, b64 } shown enlarged in a lightbox
 
   const [formats, setFormats] = useState(() => new Set(['png']));
@@ -75,6 +78,7 @@ export default function StatsFigures({
       if (reqIdRef.current !== myId) return;
       setFigures(res.figures || {});
       setNote(res.note || null);
+      setStats(res.stats || null);
     } catch (e) {
       if (reqIdRef.current !== myId) return;
       setError(readableError(e));
@@ -145,6 +149,31 @@ export default function StatsFigures({
         )}
 
         {hasResult && error && <p className="panel-warn">{error}</p>}
+
+        {hasResult && !loading && stats && Number.isFinite(stats.n) && (
+          <div className="stats-descriptive">
+            <div className="stats-descriptive-title">
+              Descriptive statistics (single-subject)
+            </div>
+            <div className="stats-descriptive-rows">
+              <span>n {stats.n}</span>
+              <span>
+                mean {fmtStat(stats.mean)} ± {fmtStat(stats.sd)}
+              </span>
+              <span>median {fmtStat(stats.median)}</span>
+              <span>IQR {fmtStat(stats.iqr)}</span>
+              <span>
+                p5 {fmtStat(stats.p5)} · p95 {fmtStat(stats.p95)}
+              </span>
+              <span>
+                min {fmtStat(stats.min)} · max {fmtStat(stats.max)}
+              </span>
+              <span>RMS {fmtStat(stats.rms)}</span>
+              <span>&gt;1 mm {fmtStat(stats.pct_over_1mm)}%</span>
+              <span>&gt;2 mm {fmtStat(stats.pct_over_2mm)}%</span>
+            </div>
+          </div>
+        )}
 
         {hasResult && !loading && figures && (
           <>
@@ -267,6 +296,10 @@ export default function StatsFigures({
     )}
     </>
   );
+}
+
+function fmtStat(v) {
+  return Number.isFinite(v) ? Number(v).toFixed(2) : '—';
 }
 
 function prettyFileKey(key) {

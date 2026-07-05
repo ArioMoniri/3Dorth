@@ -126,3 +126,4 @@ wrapt==2.2.2
 wslink==2.5.7
 yarl==1.24.2
 zipp==4.1.0
+pyacvd==0.4.0

@@ -39,6 +39,7 @@ export default function ControlPanel({
   // side / sub-mode
   side,
   onSideChange,
+  canShowBoth,
   modeBView,
   onModeBViewChange,
   referenceSide,
@@ -80,6 +81,12 @@ export default function ControlPanel({
   exportFiles,
   exportError,
   canExport,
+  // Fig-2 annotation overlays (raster export)
+  annotateLine,
+  onAnnotateLineChange,
+  annotateHeight,
+  onAnnotateHeightChange,
+  annotateApplies,
 }) {
   // Group controls by their `group` field, preserving first-seen order.
   const groups = [];
@@ -167,7 +174,28 @@ export default function ControlPanel({
               {prettySide(s)}
             </button>
           ))}
+          {/* Bilateral scans get a "Both" option that renders left + right
+              together (each coloured by its own thickness). Only shown in the
+              thickness view (Mode A or Mode-B thickness) — deviation compares a
+              single registered surface, so Both is hidden there. */}
+          {canShowBoth && !showDeviation && (
+            <button
+              className={side === 'both' ? 'active' : ''}
+              onClick={() => onSideChange('both')}
+              title="Show LEFT and RIGHT together, each coloured by its own cortical thickness"
+            >
+              Both
+            </button>
+          )}
         </div>
+        {side === 'both' && (
+          <p className="panel-hint">
+            Bilateral view: left and right are rendered together, each coloured
+            by its own cortical thickness. The stats, legend and figures below
+            describe the <strong>left</strong> side; hover either bone to read
+            its thickness. Pick a single side to isolate / clip / pick regions.
+          </p>
+        )}
 
         {mode === 'B' && !isMesh && (
           <>
@@ -361,6 +389,11 @@ export default function ControlPanel({
         files={exportFiles}
         error={exportError}
         canExport={canExport}
+        annotateLine={annotateLine}
+        onAnnotateLineChange={onAnnotateLineChange}
+        annotateHeight={annotateHeight}
+        onAnnotateHeightChange={onAnnotateHeightChange}
+        annotateApplies={annotateApplies}
         disabledReason={
           canExport
             ? undefined

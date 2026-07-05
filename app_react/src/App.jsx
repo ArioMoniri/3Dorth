@@ -79,6 +79,12 @@ export default function App() {
   // Export state.
   const [formats, setFormats] = useState(() => new Set(['png']));
   const [dpi, setDpi] = useState(150);
+  // Fig-2 measurement annotations for the RASTER export (auto-placed at the
+  // surgical-neck / lesser-tuberosity base). Sampled thickness is read off the
+  // computed scalar server-side (never fabricated); the annotated figure is
+  // descriptive / single-subject.
+  const [annotateLine, setAnnotateLine] = useState(false);
+  const [annotateHeight, setAnnotateHeight] = useState(false);
   const [camera, setCamera] = useState(DEFAULT_CAMERA);
   const [exporting, setExporting] = useState(false);
   const [exportFiles, setExportFiles] = useState(null);
@@ -132,6 +138,10 @@ export default function App() {
   const [geometry, setGeometry] = useState(null); // {url, scalar}
   const [thicknessResult, setThicknessResult] = useState(null);
   const [deviationResult, setDeviationResult] = useState(null);
+  // The bilateral "Both" view: when side === 'both' we compute BOTH sides and
+  // render two meshes together. `secondGeometry` holds the SECOND side's server
+  // geometry payload (colored client-side in `secondDisplayGeometry`).
+  const [secondGeometry, setSecondGeometry] = useState(null); // {url, scalar} | null
 
   // Monotonic request-id guard: every compute bumps this; a response is applied
   // only if it is still the latest request when it resolves, so a slow older
@@ -159,6 +169,17 @@ export default function App() {
 
   const isMesh = Boolean(session?.is_mesh) || session?.sides?.[0] === 'mesh';
   const isSingleSided = session?.sides?.length === 1 && !isMesh;
+  // Bilateral "Both" view: render left + right together. Only offered when the
+  // scan actually has both sides (a real bilateral volume, not a mesh).
+  const canShowBoth =
+    !isMesh &&
+    Boolean(session?.is_bilateral) &&
+    (session?.sides || []).includes('left') &&
+    (session?.sides || []).includes('right');
+  const isBoth = side === 'both';
+  // Wherever a CONCRETE side is needed (MPR, region thumbnails, pick-to-slices),
+  // 'both' falls back to the primary (left) side.
+  const effectiveSide = isBoth ? 'left' : side;
   // Phase IV compare view needs TWO real volume sides (left+right), not a mesh.
   const canCompareSides =
     !isMesh &&
@@ -186,6 +207,7 @@ export default function App() {
     }
     // A fresh scan invalidates prior geometry/results.
     setGeometry(null);
+    setSecondGeometry(null);
     setThicknessResult(null);
     setDeviationResult(null);
     setComputeError(null);
@@ -289,6 +311,8 @@ export default function App() {
   // the in-flight compute, not a stale one that just resolved.
   async function runAnalyze() {
     if (!session || !side || isMesh) return;
+    // The bilateral "Both" view has its own (two-compute) path.
+    if (isBoth) return runAnalyzeBoth();
     const myId = (requestIdRef.current += 1);
     setComputing(true);
     setComputeError(null);
@@ -314,6 +338,7 @@ export default function App() {
       }
       if (requestIdRef.current !== myId) return; // superseded — drop stale result
       setThicknessResult(res);
+      setSecondGeometry(null); // single-side view — no second mesh
       // Adopt the server's chosen region so the selector reflects reality.
       // Use the functional form and only change when it actually differs, so
       // adopting the auto-picked region does NOT spuriously bump the compute
@@ -322,6 +347,43 @@ export default function App() {
         setRegionLabel((prev) => (prev === res.region_label ? prev : res.region_label));
       }
       setGeometryFromThickness(res);
+    } catch (e) {
+      if (requestIdRef.current === myId) setComputeError(readableError(e));
+    } finally {
+      if (requestIdRef.current === myId) setComputing(false);
+    }
+  }
+
+  // Bilateral "Both": run analyze for LEFT then RIGHT (whole bone each — the
+  // region selector is hidden in Both, so no region_label is sent) and render
+  // the two thickness meshes together. The primary result (left) drives the
+  // stats / legend / figures exactly like a single side; the right side is
+  // rendered as the second mesh. Guarded by the same request-id supersede rule.
+  async function runAnalyzeBoth() {
+    const myId = (requestIdRef.current += 1);
+    setComputing(true);
+    setComputeError(null);
+    try {
+      let sid = session.session_id;
+      const call = (s, side_) => analyze(s, { side: side_, params: values });
+      let left;
+      let right;
+      try {
+        [left, right] = await Promise.all([call(sid, 'left'), call(sid, 'right')]);
+      } catch (e) {
+        if (e?.status === 404) {
+          if (requestIdRef.current !== myId) return;
+          const fresh = await ensureSession();
+          sid = fresh.session_id;
+          [left, right] = await Promise.all([call(sid, 'left'), call(sid, 'right')]);
+        } else {
+          throw e;
+        }
+      }
+      if (requestIdRef.current !== myId) return; // superseded — drop stale result
+      setThicknessResult(left);
+      setGeometry({ url: left.geometry_url, scalar: left.scalar });
+      setSecondGeometry({ url: right.geometry_url, scalar: right.scalar });
     } catch (e) {
       if (requestIdRef.current === myId) setComputeError(readableError(e));
     } finally {
@@ -358,6 +420,7 @@ export default function App() {
       }
       if (requestIdRef.current !== myId) return; // superseded — drop stale result
       setDeviationResult(res);
+      setSecondGeometry(null); // deviation is a single registered surface
       setGeometryFromDeviation(res);
     } catch (e) {
       if (requestIdRef.current === myId) setComputeError(readableError(e));
@@ -374,7 +437,7 @@ export default function App() {
   // The side the MPR slices. A deviation view shows the reference side's volume
   // (the frame the picks live in); otherwise the selected analyze side. A mesh
   // upload has no volume to slice.
-  const mprSide = isMesh ? null : isDeviationView ? referenceSide : side;
+  const mprSide = isMesh ? null : isDeviationView ? referenceSide : effectiveSide;
 
   // ---- 3D pick -> MPR crosshair --------------------------------------------
   // Clicking the mesh surface hands us a world point; we POST pick-to-slices to
@@ -520,11 +583,14 @@ export default function App() {
   // (session, side) pair resolves instantly from loadRegionThumbnails.
   useEffect(() => {
     if (isDeviationView || isMesh) return;
+    // The 'both' view hides the region picker (whole-bone per side), so skip
+    // the (slow) per-region preview render there.
+    if (isBoth) return;
     if (!session?.session_id || !side) return;
     if (!thicknessResult) return; // wait for the first analyze on this side
     loadRegionThumbnails(session.session_id, side);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.session_id, side, isDeviationView, isMesh, Boolean(thicknessResult)]);
+  }, [session?.session_id, side, isDeviationView, isMesh, isBoth, Boolean(thicknessResult)]);
 
   // ---- realtime public-URL polling -----------------------------------------
   // Poll GET /api/config every ~6 s so the Share panel reflects a tunnel that
@@ -584,13 +650,24 @@ export default function App() {
         dpi,
         camera,
       };
+      // Fig-2 overlays (auto-placed). Only send fields that are enabled; omit
+      // `annotate` entirely when neither is on (backward-compatible plain export).
+      if (annotateLine || annotateHeight) {
+        const annotate = {};
+        if (annotateLine) annotate.sampling_line = true;
+        if (annotateHeight) annotate.height = true;
+        args.annotate = annotate;
+      }
       if (exportMode === 'B') {
         args.referenceSide = referenceSide;
         args.targetSide = targetSide;
         args.manualTransform = manualTransform;
       } else {
-        args.side = side;
-        if (regionLabel != null) args.regionLabel = regionLabel;
+        // Raster/mesh export renders ONE surface; in the bilateral 'both' view
+        // we export the primary (left) side. (The two-mesh scene is a live
+        // viewing aid; a combined figure export is out of scope for the API.)
+        args.side = effectiveSide;
+        if (!isBoth && regionLabel != null) args.regionLabel = regionLabel;
       }
       let sid = session.session_id;
       let res;
@@ -628,12 +705,18 @@ export default function App() {
   // Keep the viewport showing whatever matches the current view.
   useEffect(() => {
     if (isDeviationView) {
+      setSecondGeometry(null); // deviation never shows a second mesh
       if (deviationResult) setGeometryFromDeviation(deviationResult);
       else setGeometry(null);
-    } else if (thicknessResult) {
+    } else if (thicknessResult && !isBoth) {
+      // Single-side thickness: restore its geometry. In the 'both' view the
+      // debounced auto-recompute (or the primary button) repopulates both
+      // meshes, so we leave the two geometries in place here.
+      setSecondGeometry(null);
       setGeometryFromThickness(thicknessResult);
-    } else {
+    } else if (!thicknessResult) {
       setGeometry(null);
+      setSecondGeometry(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeviationView]);
@@ -748,6 +831,30 @@ export default function App() {
     values.mode_b_colormap,
   ]);
 
+  // Coloring for the SECOND bilateral mesh — always a Mode-A thickness surface,
+  // sharing the exact display params (colormap / range / steps / reverse) as the
+  // primary so both sides read on one legend. Null unless the Both view is live.
+  const secondDisplayGeometry = useMemo(() => {
+    if (!secondGeometry || isDeviationView) return null;
+    return {
+      url: secondGeometry.url,
+      scalar: secondGeometry.scalar,
+      rangeMin: Number(values.mode_a_range_min ?? 0),
+      rangeMax: Number(values.mode_a_range_max ?? 1),
+      steps: Number(values.mode_a_colorbar_steps ?? 11),
+      colormap: values.mode_a_colormap ?? 'green_yellow_red',
+      reverse: Boolean(values.mode_a_colormap_reverse),
+    };
+  }, [
+    secondGeometry,
+    isDeviationView,
+    values.mode_a_range_min,
+    values.mode_a_range_max,
+    values.mode_a_colorbar_steps,
+    values.mode_a_colormap,
+    values.mode_a_colormap_reverse,
+  ]);
+
   if (error) {
     return (
       <div className="fatal">
@@ -811,6 +918,7 @@ export default function App() {
           onReset={resetDefaults}
           side={side}
           onSideChange={setSide}
+          canShowBoth={canShowBoth}
           modeBView={modeBView}
           onModeBViewChange={setModeBView}
           referenceSide={referenceSide}
@@ -848,6 +956,11 @@ export default function App() {
           exportFiles={exportFiles}
           exportError={exportError}
           canExport={Boolean(displayGeometry)}
+          annotateLine={annotateLine}
+          onAnnotateLineChange={setAnnotateLine}
+          annotateHeight={annotateHeight}
+          onAnnotateHeightChange={setAnnotateHeight}
+          annotateApplies={!isDeviationView}
         />
 
         <main
@@ -904,11 +1017,13 @@ export default function App() {
               type="button"
               className={`clip-toggle-btn${clipEnabled ? ' active' : ''}`}
               onClick={() => onToggleClip(!clipEnabled)}
-              disabled={!displayGeometry || centerView !== 'map'}
+              disabled={!displayGeometry || centerView !== 'map' || isBoth}
               title={
-                displayGeometry
-                  ? 'Isolate a sub-part with an adjustable clip box; stats recompute for the visible part'
-                  : 'Compute a thickness or deviation map first'
+                isBoth
+                  ? 'Clip is unavailable in the bilateral “Both” view — pick a single side to isolate a sub-part'
+                  : displayGeometry
+                    ? 'Isolate a sub-part with an adjustable clip box; stats recompute for the visible part'
+                    : 'Compute a thickness or deviation map first'
               }
             >
               {clipEnabled ? 'Clip: On' : 'Clip / isolate'}
@@ -952,13 +1067,14 @@ export default function App() {
         <div className="viewport-wrap">
           <Viewport
             geometry={displayGeometry}
+            secondGeometry={secondDisplayGeometry}
             onHover={setHover}
             cameraPose={camera}
             onPick={onSurfacePick}
             marker={marker}
             plane={centerView === 'oblique' ? obliquePlane : null}
             onScalarData={setScalarValues}
-            clipBox={clipEnabled ? clipBox : null}
+            clipBox={clipEnabled && !isBoth ? clipBox : null}
             onBounds={onViewportBounds}
             onVisibleMask={setVisibleMask}
           />
@@ -1034,7 +1150,9 @@ export default function App() {
                   steps={displayGeometry.steps}
                   reverse={displayGeometry.reverse}
                   colormap={displayGeometry.colormap}
-                  title={`Cortical thickness (mm) — ${cap(side)}`}
+                  title={`Cortical thickness (mm) — ${
+                    isBoth ? 'Left + Right' : cap(side)
+                  }`}
                 />
               </DraggablePanel>
             )}
@@ -1085,10 +1203,10 @@ export default function App() {
               <StatsFigures
                 sessionId={session.session_id}
                 mode={isDeviationView ? 'B' : 'A'}
-                side={side}
+                side={isDeviationView ? side : effectiveSide}
                 referenceSide={isDeviationView ? referenceSide : undefined}
                 targetSide={isDeviationView ? targetSide : undefined}
-                regionLabel={!isDeviationView ? regionLabel : undefined}
+                regionLabel={!isDeviationView && !isBoth ? regionLabel : undefined}
                 params={
                   isDeviationView ? { ...values, mirror_sagittal: mirror } : values
                 }

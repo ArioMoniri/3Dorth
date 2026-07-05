@@ -137,6 +137,7 @@ export function exportResult(
     dpi,
     camera,
     manualTransform,
+    annotate,
   },
 ) {
   const body = { mode, params, formats, dpi };
@@ -146,6 +147,9 @@ export function exportResult(
   if (regionLabel != null) body.region_label = regionLabel;
   if (camera) body.camera = camera;
   if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  // Fig-2 measurement overlays for raster/DICOM exports (auto-placed when the
+  // value is `true`). Omitted -> plain export.
+  if (annotate !== undefined && annotate !== null) body.annotate = annotate;
   return postJSON(`/api/session/${sessionId}/export`, body);
 }
 

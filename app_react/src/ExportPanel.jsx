@@ -21,6 +21,11 @@ export default function ExportPanel({
   files,
   error,
   canExport,
+  annotateLine,
+  onAnnotateLineChange,
+  annotateHeight,
+  onAnnotateHeightChange,
+  annotateApplies,
   disabledReason,
 }) {
   const anyRaster = [...formats].some((f) => RASTER.has(f));
@@ -61,6 +66,34 @@ export default function ExportPanel({
             onChange={(e) => onDpiChange(parseInt(e.target.value, 10))}
           />
         </label>
+      )}
+
+      {anyRaster && annotateApplies && (
+        <div className="export-group">
+          <div className="export-sub">Fig-2 measurement overlays</div>
+          <label className="format-chip annotate-chip">
+            <input
+              type="checkbox"
+              checked={Boolean(annotateLine)}
+              onChange={(e) => onAnnotateLineChange?.(e.target.checked)}
+            />
+            <span>Cortical-thickness sampling line</span>
+          </label>
+          <label className="format-chip annotate-chip">
+            <input
+              type="checkbox"
+              checked={Boolean(annotateHeight)}
+              onChange={(e) => onAnnotateHeightChange?.(e.target.checked)}
+            />
+            <span>Height bracket</span>
+          </label>
+          <p className="panel-hint">
+            Auto-placed at the surgical-neck / lesser-tuberosity base. Sampled
+            thickness is read off the computed map (never fabricated); the
+            annotated figure is descriptive / single-subject. Applies to raster
+            formats (PNG/TIFF/JPG) and the DICOM SC.
+          </p>
+        </div>
       )}
 
       <div className="export-group">

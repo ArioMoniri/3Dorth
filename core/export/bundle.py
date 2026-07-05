@@ -24,7 +24,7 @@ def export_bundle(
     mesh, scalar_name, params, out_dir, *,
     formats=("png", "tiff", "stl", "vtp"), dpi: int = 300,
     camera: dict | None = None, diverging: bool = False,
-    stem: str = "export",
+    stem: str = "export", annotate: dict | None = None,
 ) -> dict[str, str]:
     """Export ``mesh`` (coloured by ``scalar_name``) to every format in ``formats``.
 
@@ -32,6 +32,10 @@ def export_bundle(
     ``ply`` / ``obj`` / ``vtp`` / ``glb`` (AR); and ``dicom`` (de-identified
     Secondary Capture).
     Returns a dict mapping each requested format to the saved file path (str).
+
+    ``annotate`` (optional) overlays the Fig-2 sampling line / height bracket on
+    every RASTER figure (and the DICOM SC baked from it); mesh exports are the
+    plain surface. See :func:`core.export.figure.export_figure`.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +59,7 @@ def export_bundle(
     if need_raster or need_dicom:
         base_png = out_dir / f"{stem}.png"
         export_figure(mesh, scalar_name, params, base_png, fmt="png",
-                      dpi=dpi, camera=camera, diverging=diverging)
+                      dpi=dpi, camera=camera, diverging=diverging, annotate=annotate)
 
     for f in want:
         if f in _RASTER:
@@ -64,7 +68,7 @@ def export_bundle(
             else:
                 p = out_dir / f"{stem}.{f}"
                 export_figure(mesh, scalar_name, params, p, fmt=f, dpi=dpi,
-                              camera=camera, diverging=diverging)
+                              camera=camera, diverging=diverging, annotate=annotate)
                 saved[f] = str(p)
         elif f in _MESH:
             p = out_dir / f"{stem}.{f}"

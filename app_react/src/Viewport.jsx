@@ -135,8 +135,17 @@ function allScalarsAt(polydata, pointId) {
 //   active this is null (nothing to mask — "whole" already means everything).
 //   Used by the parent to recompute Mean/Median/SD/RMS/Min/Max/Count over just
 //   the visible (on-screen) vertices, entirely client-side.
+// `secondGeometry` — an OPTIONAL second geometry payload (same shape as
+//   `geometry`). When present (the LEFT/RIGHT/BOTH "Both" bilateral view), a
+//   SECOND actor is rendered in the same scene, each mesh coloured by its own
+//   side's thickness with the identical LUT. Hover picking works across both
+//   actors (the picker reads whichever mesh is under the cursor); the camera is
+//   framed to include both. Clip / visible-mask / scalar-data reporting stay on
+//   the PRIMARY geometry only (Both is a comparison-of-two view, not a clip
+//   target). Omit / null for the normal single-mesh view.
 export default function Viewport({
   geometry,
+  secondGeometry,
   onHover,
   cameraPose,
   onPick,
@@ -228,6 +237,12 @@ export default function Viewport({
       mapper: null,
       polydata: null,
       lastUrl: null,
+      // Optional SECOND mesh (the bilateral "Both" view).
+      actor2: null,
+      mapper2: null,
+      polydata2: null,
+      lastUrl2: null,
+      scalarName2: null,
       markerActor: null,
       markerSource: null,
       planeActor: null,
@@ -276,6 +291,16 @@ export default function Viewport({
 
     // ---- hover picking ------------------------------------------------------
     const el = containerRef.current;
+    // Resolve which of the (up to two) loaded meshes the picker just hit, so a
+    // hover/click over the second bilateral mesh reads THAT mesh's scalars.
+    const pickedPolydata = (ctx) => {
+      const hit = ctx.picker.getActors?.() || [];
+      if (ctx.actor2 && hit.includes(ctx.actor2)) {
+        return { polydata: ctx.polydata2, scalarName: ctx.scalarName2 };
+      }
+      return { polydata: ctx.polydata, scalarName: ctx.scalarName };
+    };
+
     const doPick = (clientX, clientY) => {
       const ctx = contextRef.current;
       if (!ctx || !ctx.actor || !ctx.polydata) {
@@ -300,10 +325,11 @@ export default function Viewport({
         return;
       }
       const pos = ctx.picker.getPickPosition();
-      const pointId = pickedPointId(ctx.polydata, cellId, pos);
+      const { polydata: hitPoly, scalarName: hitScalar } = pickedPolydata(ctx);
+      const pointId = hitPoly ? pickedPointId(hitPoly, cellId, pos) : null;
       const value =
-        pointId != null ? scalarAt(ctx.polydata, ctx.scalarName, pointId) : null;
-      const scalars = pointId != null ? allScalarsAt(ctx.polydata, pointId) : {};
+        pointId != null ? scalarAt(hitPoly, hitScalar, pointId) : null;
+      const scalars = pointId != null ? allScalarsAt(hitPoly, pointId) : {};
       onHoverRef.current?.({
         value,
         scalars,
@@ -474,6 +500,83 @@ export default function Viewport({
     geometry?.steps,
     geometry?.reverse,
     geometry?.colormap,
+  ]);
+
+  // ---- optional SECOND mesh (bilateral "Both" view) -------------------------
+  // Loads/updates a second actor coloured by its own side's thickness with the
+  // SAME LUT settings as the primary. When present, the camera is reset to frame
+  // BOTH meshes. Removing it (secondGeometry -> null) reverts to a single-mesh
+  // scene and re-frames on the primary alone.
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx) return undefined;
+    let cancelled = false;
+
+    async function rebuild2() {
+      const { renderer } = ctx;
+      if (!secondGeometry || !secondGeometry.url) {
+        // Tear down any existing second actor and re-frame on the primary.
+        if (ctx.actor2) {
+          renderer.removeActor(ctx.actor2);
+          ctx.actor2 = null;
+          ctx.mapper2 = null;
+          ctx.polydata2 = null;
+          ctx.lastUrl2 = null;
+          applyCameraPose(ctx, true);
+        }
+        return;
+      }
+      const isNew = ctx.lastUrl2 !== secondGeometry.url;
+      if (isNew) {
+        const buf = await fetchGeometryArrayBuffer(secondGeometry.url);
+        if (cancelled) return;
+        const polydata = parseVtp(buf);
+        if (ctx.actor2) renderer.removeActor(ctx.actor2);
+        ctx.mapper2 = vtkMapper.newInstance();
+        ctx.actor2 = vtkActor.newInstance();
+        ctx.actor2.setMapper(ctx.mapper2);
+        ctx.mapper2.setInputData(polydata);
+        renderer.addActor(ctx.actor2);
+        ctx.polydata2 = polydata;
+        ctx.lastUrl2 = secondGeometry.url;
+      }
+      if (!ctx.mapper2) return;
+      ctx.scalarName2 = secondGeometry.scalar;
+      const lut = buildDiscreteLUT({
+        rangeMin: secondGeometry.rangeMin,
+        rangeMax: secondGeometry.rangeMax,
+        steps: secondGeometry.steps,
+        reverse: secondGeometry.reverse,
+        colormap: secondGeometry.colormap,
+      });
+      ctx.mapper2.setLookupTable(lut);
+      ctx.mapper2.setUseLookupTableScalarRange(true);
+      ctx.mapper2.setScalarRange(secondGeometry.rangeMin, secondGeometry.rangeMax);
+      ctx.mapper2.setColorModeToMapScalars();
+      ctx.mapper2.setScalarModeToUsePointFieldData();
+      ctx.mapper2.setColorByArrayName(secondGeometry.scalar);
+      ctx.mapper2.setInterpolateScalarsBeforeMapping(true);
+      if (cancelled) return;
+      // Frame both meshes together only when the second mesh is (re)loaded.
+      if (isNew) applyCameraPose(ctx, true);
+      else ctx.renderWindow?.render();
+    }
+
+    rebuild2();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    secondGeometry?.url,
+    secondGeometry?.scalar,
+    secondGeometry?.rangeMin,
+    secondGeometry?.rangeMax,
+    secondGeometry?.steps,
+    secondGeometry?.reverse,
+    secondGeometry?.colormap,
+    // Re-frame both when the PRIMARY mesh changes underneath a live second mesh.
+    geometry?.url,
   ]);
 
   // ---- clip box: move the 6 planes, toggle them on the mapper, recompute the

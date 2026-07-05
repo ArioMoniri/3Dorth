@@ -66,6 +66,8 @@ AXES = ["x", "y", "z"]
 SIGN_CONVENTIONS = ["target_outside_positive", "target_outside_negative"]
 STANDARD_VIEWS = ["anterior", "posterior", "lateral", "medial", "superior", "inferior"]
 SCAN_ROLES = ["scan_a", "scan_b"]
+# DISPLAY-ONLY surface reconstruction levels (3-matic-equivalent smooth render).
+MESH_RECONSTRUCT_LEVELS = ["raw", "smooth", "wrap"]
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +242,19 @@ REGISTRY: list[ParamSpec] = [
              "voxel surface; 2-3 = smooth sub-voxel surface, the step Mimics/"
              "3-matic do — the biggest driver of a smooth render). Display only — "
              "cortical thickness is computed on the raw mask.",
+    ),
+    ParamSpec(
+        key="mesh_reconstruct", label="Surface reconstruction", group="Meshing",
+        control=ControlType.ENUM, default="wrap", choices=MESH_RECONSTRUCT_LEVELS,
+        help="3-matic-EQUIVALENT surface finishing for the render. 'raw' = the "
+             "marching-cubes shell as-is; 'smooth' = watertight repair (fill holes "
+             "+ manifold clean) + windowed-sinc smoothing; 'wrap' (default) = also "
+             "isotropic-remesh to an even triangulation and decimate to budget — a "
+             "clean, watertight, evenly-triangulated shell (the paper's smooth look). "
+             "DISPLAY-ONLY cosmetic mesh: the mask boundary is unchanged and cortical "
+             "thickness stays computed on the raw thresholded mask at native spacing, "
+             "then re-sampled onto the reconstructed vertices (single-subject, "
+             "descriptive).",
     ),
 
     # ---- Views --------------------------------------------------------------

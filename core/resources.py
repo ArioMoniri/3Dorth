@@ -67,6 +67,23 @@ def adaptive_iso(shape, spacing, min_iso: float = 0.6,
     return float(max(min_iso, iso_for_budget))
 
 
+# Vertex budget for the DISPLAY-ONLY isotropic remesh / decimation (keeps the
+# 3-matic-equivalent reconstruction cheap on any device). Env-tunable.
+MAX_RECON_VERTS = _env_int("THREEDORTH_MAX_RECON_VERTS", 40_000)
+MIN_RECON_VERTS = _env_int("THREEDORTH_MIN_RECON_VERTS", 4_000)
+
+
+def reconstruct_vertex_budget(shape, min_verts: int = MIN_RECON_VERTS,
+                              max_verts: int = MAX_RECON_VERTS) -> int:
+    """Target vertex count for the isotropic remesh, bounded so the cosmetic
+    surface reconstruction stays fast on the cropped bone. Scales gently with the
+    crop's voxel count (roughly its surface area) between a floor and a cap."""
+    nvox = int(np.prod(shape))
+    # ~surface scales with voxels**(2/3); keep the constant modest.
+    est = int(6.0 * (max(nvox, 1) ** (2.0 / 3.0)))
+    return int(min(max(est, min_verts), max_verts))
+
+
 def downsample_to_budget(arr: np.ndarray, spacing, max_voxels: int = MAX_WORK_VOXELS):
     """Block-downsample ``arr`` (and scale spacing) if it exceeds the voxel budget."""
     if arr.size <= max_voxels:

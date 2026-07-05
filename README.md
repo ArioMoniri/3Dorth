@@ -31,6 +31,14 @@ exposes the identical feature set.</sub>
 | ![Thickness map](docs/assets/phase2_thickness.png) | ![Signed deviation map](docs/assets/qa_trame_rework_deviation.png) |
 | One scan. Green = thin wall, red = thick, in mm. | Two sides registered; red = bone gained, blue = lost. |
 
+![Cortical thickness on the bundled demo — smooth reconstructed surface with the
+discrete Fig-2 colorbar](docs/assets/demo_smooth_thickness.png)
+<sub>Live output on the de-identified demo, rendered in the paper's Fig-2 layout: the
+coloured bone (smooth, watertight, evenly-remeshed surface — supersample + windowed-sinc
++ pyacvd isotropic remesh) and the discrete green→red thickness colorbar, exportable at
+any DPI. The reconstruction is <b>display-only</b> — cortical thickness is computed on
+the raw mask (the scalar is re-sampled onto the remeshed surface, not recomputed).</sub>
+
 - **Mode A** segments the bone from its CT density, computes wall thickness at
   every surface point, and colours it with the paper's green→red scale.
 - **Mode B** rebuilds both bones, aligns them (with an optional left/right
@@ -40,25 +48,29 @@ Everything is interactive and applies in real time:
 
 - **Load** a DICOM `.zip`, NIfTI, or a surface mesh — or use the bundled
   de-identified demo. A bilateral scan splits into Left/Right; pick a **region**
-  by its thumbnail.
+  by its thumbnail, and view **Left, Right, or both sides together (Bilateral)**.
 - **Every parameter applies automatically** — colour/range/steps re-colour
   instantly, segmentation/thickness parameters re-run after a short pause (no
   Apply click needed).
 - **Hover** the surface for the per-point value; **export** PNG/TIFF (with a DPI),
   STL/PLY/OBJ/VTP, or DICOM with a camera pose; **Mode B** adds a manual-anchor
   nudge and a reference/target swap.
-- **Statistics & figures** — a collapsible section renders publication-style plots
-  from the computed result (a distribution histogram of the active scalar + a
-  per-region summary when the data supports it) and exports them as **PNG/TIFF/JPG at
-  a chosen DPI**, at parity in both UIs (single-subject/descriptive, labelled as such).
-- **Measure on the CT images** — distance / angle tools on the 2D reformats (mm read
-  from the scan geometry), exported *burned into* the PNG. Click a figure to enlarge
-  it, and **drag/resize** the overlay panels (legend / stats / figures) anywhere.
-- **Smooth, publication surfaces** — a **Surface supersample** mesher resamples the
-  voxel staircase away (the step Mimics/3-matic do) for a clean render, and a
-  **Surface hole-fill** knob bridges small cortex gaps; both are display-only, so the
-  cortical-thickness numbers are still computed on the raw mask. The coloured bone +
-  the discrete Fig-2 colorbar export as PNG/TIFF at any DPI (the paper's Fig-2 layout).
+- **Statistics & figures** — a collapsible section renders **article-quality** plots
+  (distribution histogram + KDE, a cumulative **ECDF**, a **Table-1** descriptive panel,
+  and a per-region box/summary when the data supports it) with rich stats (percentiles,
+  IQR, %>1/2 mm), exported as **PNG/TIFF/JPG at a chosen DPI**, at parity in both UIs
+  (single-subject/descriptive, labelled as such).
+- **Measure on the CT images** — distance / angle tools on the 2D reformats (**MPR,
+  oblique, and the two-bone compare panes**; mm read from the scan geometry), exported
+  *burned into* the PNG. Click a figure to enlarge, and **drag/resize** the overlay
+  panels (legend / stats / figures) anywhere.
+- **Smooth, publication surfaces** — a display-only **surface reconstruction** (`raw` /
+  `smooth` / `wrap`): supersample resamples the voxel staircase away, windowed-sinc
+  removes residual steps, and a **pyacvd isotropic remesh** yields a clean, watertight,
+  evenly-triangulated shell (the Mimics/3-matic look). Thickness stays on the raw mask
+  (the scalar is re-sampled onto the remeshed surface). The coloured bone + the discrete
+  Fig-2 colorbar — with optional **sampling-line / height-bracket** annotations — export
+  as PNG/TIFF at any DPI (the paper's Fig-2 A/B layout).
 - **Share** a public link — a resilient tunnel that **auto-selects whatever works from
   your network** (Cloudflare / Pinggy / Tailscale Funnel / serveo / your own relay) and
   survives sleep/wake — and **switch between the two UIs** from either one.
@@ -436,10 +448,10 @@ expose the same knobs (a test fails the build if they ever drift apart).
 </details>
 
 <details>
-<summary><b>Full parameter list (30 knobs) and reproducibility</b></summary>
+<summary><b>Full parameter list (31 knobs) and reproducibility</b></summary>
 
 Everything configurable lives in one registry,
-[`core/parameters.py`](core/parameters.py) — all 30 parameters with ranges and
+[`core/parameters.py`](core/parameters.py) — all 31 parameters with ranges and
 units. Both UIs read that registry, and the active values are written to
 [`config.yaml`](config.yaml), so re-running from a saved `config.yaml`
 reproduces the numbers. The defaults reproduce Guo et al. 2022:

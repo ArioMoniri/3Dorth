@@ -51,6 +51,11 @@ export default function MPRViewer({
   const [committedWL, setCommittedWL] = useState({ window: 1800, level: 400 });
   const wlTimerRef = useRef(null);
 
+  // Measurement mode (distance / angle) for the 2D slice panels. When on, each
+  // SliceView's MeasureOverlay becomes live and click-to-pick is suspended
+  // (same gated pattern as the oblique reformat).
+  const [measureMode, setMeasureMode] = useState(false);
+
   const dims = info
     ? { nz: info.shape_zyx[0], ny: info.shape_zyx[1], nx: info.shape_zyx[2] }
     : null;
@@ -209,12 +214,14 @@ export default function MPRViewer({
             side={side}
             plane={plane}
             dims={dims}
+            spacing={spacing}
             crosshair={crosshair}
             window={committedWL.window}
             level={committedWL.level}
             maxDim={512}
             onScrub={onScrub}
             onInPlanePick={onInPlanePick}
+            measureMode={measureMode}
           />
         ))}
 
@@ -254,6 +261,14 @@ export default function MPRViewer({
             }
           >
             Bone preset
+          </button>
+          <button
+            type="button"
+            className={`measure-toggle${measureMode ? ' active' : ''}`}
+            onClick={() => setMeasureMode((v) => !v)}
+            title="Place distance / angle measurements on the slices (mm from the scan geometry). Click to add points, drag to adjust. Click-to-pick is paused while measuring."
+          >
+            {measureMode ? '✓ Measuring' : '📏 Measure'}
           </button>
           <div className="mpr-side-tag">
             Side: <strong>{side}</strong> · voxel [{crosshair.ix}, {crosshair.iy},{' '}

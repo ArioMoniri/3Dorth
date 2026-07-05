@@ -123,7 +123,7 @@ def test_render_result_figures_all_that_apply():
               {"label": 2, "volume_cm3": 30.0, "boneness": 0.5}]
     out = render_result_figures(scalar_values=vals, scalar_name="thickness_mm",
                                 regions=regions, dpi=100)
-    assert set(out.keys()) == {"histogram", "by_region"}
+    assert set(out.keys()) == {"histogram", "ecdf", "table", "by_region"}
     for png in out.values():
         assert png[:8] == _PNG_MAGIC
 
@@ -133,7 +133,7 @@ def test_render_result_figures_omits_by_region_single_region():
     out = render_result_figures(scalar_values=vals, scalar_name="thickness_mm",
                                 regions=[{"label": 1, "volume_cm3": 100.0, "boneness": 0.8}],
                                 dpi=100)
-    assert set(out.keys()) == {"histogram"}
+    assert set(out.keys()) == {"histogram", "ecdf", "table"}
 
 
 def test_render_result_figures_which_filter():
@@ -205,7 +205,11 @@ def test_figures_endpoint_returns_base64_pngs(monkeypatch):
         assert r.status_code == 200, r.text
         body = r.json()
         assert "figures" in body and "note" in body
-        assert set(body["figures"].keys()) == {"histogram", "by_region"}
+        assert set(body["figures"].keys()) == {"histogram", "ecdf", "table", "by_region"}
+        # descriptive stat block with percentiles / IQR / threshold fractions
+        st = body["stats"]
+        for k in ("p5", "p25", "p50", "p75", "p95", "iqr", "pct_over_1mm", "pct_over_2mm"):
+            assert k in st, f"missing stat key {k}"
         for name, b64 in body["figures"].items():
             png = base64.b64decode(b64)
             assert png[:8] == _PNG_MAGIC, f"{name} is not a valid PNG"
@@ -259,7 +263,7 @@ def test_figures_endpoint_single_region_omits_by_region(monkeypatch):
         r = CLIENT.post(f"/api/session/{sid}/figures", json={"mode": "A", "side": "full"})
         assert r.status_code == 200, r.text
         body = r.json()
-        assert set(body["figures"].keys()) == {"histogram"}
+        assert set(body["figures"].keys()) == {"histogram", "ecdf", "table"}
         assert "by_region" in body["note"].lower()
     finally:
         session_router.SESSIONS.pop(sid, None)
@@ -370,7 +374,8 @@ def test_export_figures_endpoint_writes_png_and_tiff(monkeypatch):
         assert r.status_code == 200, r.text
         body = r.json()
         assert set(body["files"].keys()) == {
-            "histogram_png", "histogram_tiff", "by_region_png", "by_region_tiff",
+            "histogram_png", "histogram_tiff", "ecdf_png", "ecdf_tiff",
+            "table_png", "table_tiff", "by_region_png", "by_region_tiff",
         }
         for url in body["files"].values():
             assert url.startswith("/api/exports/")
@@ -403,7 +408,7 @@ def test_export_figures_endpoint_single_format_single_name(monkeypatch):
                         json={"mode": "A", "side": "full", "formats": ["png"], "dpi": 100})
         assert r.status_code == 200, r.text
         body = r.json()
-        assert set(body["files"].keys()) == {"histogram"}  # single region -> no by_region
+        assert set(body["files"].keys()) == {"histogram", "ecdf", "table"}  # single region -> no by_region
         assert "by_region" in body["note"].lower()
     finally:
         session_router.SESSIONS.pop(sid, None)

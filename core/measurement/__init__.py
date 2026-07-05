@@ -1,5 +1,9 @@
 """Fig-2 measurement tools: sampling line (panel A) + height bracket (panel B)."""
 
+from core.measurement.annotate import (
+    AnnotationOverlays,
+    plan_annotations,
+)
 from core.measurement.height import (
     HeightMeasurement,
     measure_height,
@@ -18,4 +22,6 @@ __all__ = [
     "HeightMeasurement",
     "measure_height",
     "valid_height",
+    "AnnotationOverlays",
+    "plan_annotations",
 ]

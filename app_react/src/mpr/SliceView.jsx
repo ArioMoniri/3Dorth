@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { sliceUrl } from '../api';
+import MeasureOverlay, { exportWithMeasures } from '../MeasureOverlay';
 
 // Per-plane: which crosshair voxel component is the slice INDEX, and which two
 // are the in-plane (col, row) axes. Values name the key in {ix,iy,iz}.
@@ -39,21 +40,30 @@ export default function SliceView({
   side,
   plane,
   dims, // { nx, ny, nz }
+  spacing, // [sx, sy, sz] mm — for physical-mm measurements
   crosshair, // { ix, iy, iz }
   window: win,
   level,
   maxDim = 512,
   onScrub, // (plane, newIndex) => void
   onInPlanePick, // (plane, col, row) => void  (voxel coords)
+  measureMode = false, // when true the MeasureOverlay is live (and click-to-pick is suspended)
 }) {
   const boxRef = useRef(null);
   const imgRef = useRef(null);
+  // Per-panel measurements (distance / angle). Local to this plane's slice.
+  const [measures, setMeasures] = useState([]);
   // The rendered image rectangle inside the box, accounting for object-fit:
   // contain letterboxing, so the crosshair overlay and click-mapping stay
   // pixel-accurate rather than assuming the image fills the whole box.
   const [imgRect, setImgRect] = useState(null); // { left, top, w, h } in box px
 
   const map = PLANE_MAP[plane];
+  // Physical span (mm) of the displayed slice along each in-plane axis, so the
+  // MeasureOverlay reports true mm even though the two axes' spacings can differ.
+  // col/row axes name a voxel component ('ix'|'iy'|'iz'); the matching spacing
+  // index is x=0, y=1, z=2.
+  const SP_IDX = { ix: 0, iy: 1, iz: 2 };
   const idx = crosshair[map.index];
   const nIndex = dims[
     plane === 'axial' ? 'nz' : plane === 'coronal' ? 'ny' : 'nx'
@@ -62,6 +72,9 @@ export default function SliceView({
   const nRow = dims[map.nRow];
   const col = crosshair[map.col];
   const row = crosshair[map.row];
+
+  const spanXMm = spacing ? nCol * spacing[SP_IDX[map.col]] : null;
+  const spanYMm = spacing ? nRow * spacing[SP_IDX[map.row]] : null;
 
   const src = sliceUrl(sessionId, {
     side,
@@ -141,8 +154,12 @@ export default function SliceView({
         className="mpr-image-box"
         ref={boxRef}
         onWheel={onWheel}
-        onMouseDown={pickFromEvent}
-        title="Scroll to scrub · click to move crosshair"
+        onMouseDown={measureMode ? undefined : pickFromEvent}
+        title={
+          measureMode
+            ? 'Measure mode — click to place points, drag handles to adjust'
+            : 'Scroll to scrub · click to move crosshair'
+        }
       >
         <img
           ref={imgRef}
@@ -151,6 +168,18 @@ export default function SliceView({
           alt={`${plane} slice ${idx}`}
           draggable={false}
           onLoad={recalcRect}
+        />
+        {/* Measurement overlay — inert (pointer-events:none) unless measureMode
+            is on, so it never interferes with scrubbing / click-to-pick. mm come
+            from the slice's real per-axis physical span (array-oriented). */}
+        <MeasureOverlay
+          rect={imgRect}
+          spanXMm={spanXMm}
+          spanYMm={spanYMm}
+          active={measureMode}
+          measures={measures}
+          onChange={setMeasures}
+          unitLabel="distance"
         />
         {/* crosshair overlay — lines span only the displayed image rect so they
             never bleed into the letterbox. */}
@@ -189,6 +218,26 @@ export default function SliceView({
         onChange={(e) => onScrub?.(plane, Number(e.target.value))}
         aria-label={`${plane} slice index`}
       />
+
+      {measureMode && measures.length > 0 && (
+        <button
+          type="button"
+          className="measure-export"
+          onClick={() =>
+            exportWithMeasures(
+              imgRef.current,
+              measures,
+              spanXMm,
+              'distance',
+              `${plane}_measured.png`,
+              { x: spanXMm, y: spanYMm },
+            )
+          }
+          title="Download this slice with the measurements burned into the image"
+        >
+          ⤓ Export slice with measures
+        </button>
+      )}
     </div>
   );
 }

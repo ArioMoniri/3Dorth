@@ -90,6 +90,9 @@ export default function ObliqueView({
   const [center, setCenter] = useState(null); // [x,y,z] mm — base plane centre
   const [measureMode, setMeasureMode] = useState(false); // on-image measurement tools
   const [measures, setMeasures] = useState([]);
+  // Two-box compare mode: independent measurements per bone box.
+  const [refMeasures, setRefMeasures] = useState([]);
+  const [tgtMeasures, setTgtMeasures] = useState([]);
 
   const [image, setImage] = useState(null); // { url, meta } — single-box mode
   const [loading, setLoading] = useState(false);
@@ -509,14 +512,58 @@ export default function ObliqueView({
           </div>
         )}
 
+        <div className="measure-tools-row">
+          <button
+            type="button"
+            className={`measure-toggle${measureMode ? ' active' : ''}`}
+            onClick={() => setMeasureMode((v) => !v)}
+            disabled={!refImage && !tgtImage}
+            title="Place distance / angle measurements on either bone's reformat (mm from the scan geometry). Click to add points, drag to adjust. Click-to-pick is paused while measuring."
+          >
+            {measureMode ? '✓ Measuring' : '📏 Measure'}
+          </button>
+          <button
+            type="button"
+            className="measure-export"
+            disabled={!refImage || refMeasures.length === 0}
+            onClick={() =>
+              exportWithMeasures(
+                imgElRef.current, refMeasures, refImage?.meta?.size_mm, 'distance',
+                'oblique_reference_measured.png',
+              )
+            }
+            title="Download the reference reformat with its measurements burned in"
+          >
+            ⤓ Export reference
+          </button>
+          <button
+            type="button"
+            className="measure-export"
+            disabled={!tgtImage || tgtMeasures.length === 0}
+            onClick={() =>
+              exportWithMeasures(
+                tgtImgElRef.current, tgtMeasures, tgtImage?.meta?.size_mm, 'distance',
+                'oblique_target_measured.png',
+              )
+            }
+            title="Download the target reformat with its measurements burned in"
+          >
+            ⤓ Export target
+          </button>
+        </div>
+
         <div className="oblique-compare-grid">
           <div className="compare-pane">
             <div className="compare-pane-label">Reference bone</div>
             <div
               className="mpr-image-box oblique-image-box"
               ref={imgBoxRef}
-              onMouseDown={onImageClick}
-              title="Click the reformat to move the 3D marker to that exact point"
+              onMouseDown={measureMode ? undefined : onImageClick}
+              title={
+                measureMode
+                  ? 'Measure mode — click to place points, drag handles to adjust'
+                  : 'Click the reformat to move the 3D marker to that exact point'
+              }
             >
               {refImage ? (
                 <>
@@ -544,6 +591,14 @@ export default function ObliqueView({
                       />
                     </>
                   )}
+                  <MeasureOverlay
+                    rect={rect}
+                    sizeMm={refImage?.meta?.size_mm}
+                    active={measureMode}
+                    measures={refMeasures}
+                    onChange={setRefMeasures}
+                    unitLabel="distance"
+                  />
                 </>
               ) : (
                 <div className="oblique-empty">
@@ -566,8 +621,12 @@ export default function ObliqueView({
             <div
               className="mpr-image-box oblique-image-box"
               ref={tgtImgBoxRef}
-              onMouseDown={onTgtImageClick}
-              title="Best-effort click: shows this bone's matched centre crosshair"
+              onMouseDown={measureMode ? undefined : onTgtImageClick}
+              title={
+                measureMode
+                  ? 'Measure mode — click to place points, drag handles to adjust'
+                  : "Best-effort click: shows this bone's matched centre crosshair"
+              }
             >
               {tgtImage ? (
                 <>
@@ -595,6 +654,14 @@ export default function ObliqueView({
                       />
                     </>
                   )}
+                  <MeasureOverlay
+                    rect={tgtRect}
+                    sizeMm={tgtImage?.meta?.size_mm}
+                    active={measureMode}
+                    measures={tgtMeasures}
+                    onChange={setTgtMeasures}
+                    unitLabel="distance"
+                  />
                 </>
               ) : (
                 <div className="oblique-empty">

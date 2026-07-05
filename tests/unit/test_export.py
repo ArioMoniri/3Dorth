@@ -173,3 +173,62 @@ def test_export_bundle_includes_dicom(tmp_path):
     ds = pydicom.dcmread(files["dicom"])
     assert ds.SamplesPerPixel == 3
     assert str(getattr(ds, "PatientID", "")) == ""
+
+
+# ------------------------- Fig-2 annotations ------------------------------ #
+def _dark_pixels(path):
+    im = np.asarray(Image.open(path).convert("RGB")).astype(np.int32)
+    return int(((im < 60).all(axis=-1)).sum())
+
+
+def test_export_figure_annotations_visible(tmp_path):
+    """Auto-placed sampling line + height bracket add visible (dark) overlay
+    pixels vs. the same figure with no annotations."""
+    mesh = _thickness_mesh()
+    params = P.default_parameters()
+    plain = export_figure(mesh, "thickness_mm", params, tmp_path / "plain.png",
+                          fmt="png", dpi=120)
+    annot = export_figure(mesh, "thickness_mm", params, tmp_path / "annot.png",
+                          fmt="png", dpi=120,
+                          annotate={"sampling_line": True, "height": True})
+    assert annot.exists() and annot.stat().st_size > 5000
+    assert _dark_pixels(annot) > _dark_pixels(plain) + 100
+
+
+def test_export_figure_annotate_none_is_noop(tmp_path):
+    mesh = _thickness_mesh()
+    params = P.default_parameters()
+    a = export_figure(mesh, "thickness_mm", params, tmp_path / "a.png", fmt="png",
+                      dpi=120, annotate=None)
+    b = export_figure(mesh, "thickness_mm", params, tmp_path / "b.png", fmt="png",
+                      dpi=120)
+    assert abs(_dark_pixels(a) - _dark_pixels(b)) < 50
+
+
+def test_plan_annotations_reads_real_values(tmp_path):
+    """plan_annotations samples thickness straight off the scalar (never
+    fabricated) and returns the Fig-2 captions."""
+    from core.measurement import plan_annotations
+    mesh = _thickness_mesh()
+    params = P.default_parameters()
+    ov = plan_annotations(mesh, "thickness_mm",
+                          {"sampling_line": True, "height": True}, params)
+    assert ov.any
+    assert len(ov.line_points) == params.measure_line_points
+    lo = float(mesh["thickness_mm"].min()) - 1e-3
+    hi = float(mesh["thickness_mm"].max()) + 1e-3
+    assert all(lo <= p.value_mm <= hi for p in ov.line_points)
+    assert ov.captions == ["Cortical thickness", "Height"]
+    assert ov.height is not None and ov.height.height_mm > 0
+
+
+def test_export_bundle_annotations_reach_rasters(tmp_path):
+    mesh = _thickness_mesh()
+    files = export_bundle(mesh, "thickness_mm", P.default_parameters(), tmp_path,
+                          formats=("png", "vtp"), dpi=120,
+                          annotate={"sampling_line": True, "height": True})
+    from pathlib import Path
+    assert Path(files["png"]).exists()
+    plain = export_figure(mesh, "thickness_mm", P.default_parameters(),
+                          tmp_path / "plain.png", fmt="png", dpi=120)
+    assert _dark_pixels(files["png"]) > _dark_pixels(plain) + 100

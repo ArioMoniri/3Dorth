@@ -25,7 +25,8 @@ import core.resources as R
 import core.viz.slice as mpr
 from core import pipeline
 from core.export import export_bundle
-from core.stats.figures import render_result_figures
+from core.stats.figures import FIGURE_NAMES as _FIGURE_NAMES
+from core.stats.figures import descriptive_stats, render_result_figures
 
 router = APIRouter(prefix="/api")
 
@@ -88,9 +89,14 @@ class ExportReq(BaseModel):
     dpi: int = 300
     camera: dict | None = None
     manual_transform: list[list[float]] | None = None
-
-
-_FIGURE_NAMES = ("histogram", "by_region")
+    # Optional Fig-2 measurement annotations overlaid on the raster figure(s):
+    #   {"sampling_line": true | {"p0":[x,y,z],"p1":[x,y,z],"n":3},
+    #    "height": true | {"axis":"z","lower":..,"upper":..,"band":[lo,hi]}}
+    # Either panel is auto-placed at the surgical-neck / lesser-tuberosity base
+    # when coordinates are omitted. Sampled thickness values are read off the
+    # computed scalar (never fabricated); the annotated figure is descriptive /
+    # single-subject. Applies to raster formats (png/tiff/jpg) + the DICOM SC.
+    annotate: dict | None = None
 
 
 class FiguresReq(BaseModel):
@@ -100,7 +106,7 @@ class FiguresReq(BaseModel):
     target_side: str | None = None
     region_label: int | None = None
     params: dict = {}
-    which: list[str] | None = None   # subset of ("histogram", "by_region"); None = all that apply
+    which: list[str] | None = None   # subset of FIGURE_NAMES (histogram/ecdf/table/by_region); None = all that apply
     manual_transform: list[list[float]] | None = None
 
 
@@ -753,7 +759,15 @@ def figures(sid: str, req: FiguresReq) -> dict:
                   "fewer than 2 bone regions were segmented — nothing to compare.")
         note += f" 'by_region' omitted: {reason}"
 
-    return {"figures": encoded, "note": note}
+    # Descriptive stat block (percentiles / IQR / %>1mm / %>2mm) — the same
+    # numbers the Table-1 figure renders, exposed for programmatic use.
+    stats_block = descriptive_stats(values, scalar_name=scalar_name)
+    if regions and len(regions) > 1:
+        stats_block["per_region"] = [
+            {"label": r["label"], "volume_cm3": r["volume_cm3"],
+             "boneness": r.get("boneness")} for r in regions]
+
+    return {"figures": encoded, "stats": stats_block, "note": note}
 
 
 def _compute_for_export(s: dict, req: "ExportReq", params) -> tuple:
@@ -818,7 +832,7 @@ def export(sid: str, req: ExportReq) -> dict:
         files = export_bundle(mesh, scalar, params, out_dir,
                               formats=tuple(f.lower() for f in req.formats),
                               dpi=req.dpi, camera=req.camera, diverging=diverging,
-                              stem="export")
+                              stem="export", annotate=req.annotate)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 
@@ -894,4 +908,11 @@ def export_figures(sid: str, req: ExportFiguresReq) -> dict:
                   "fewer than 2 bone regions were segmented — nothing to compare.")
         note += f" 'by_region' omitted: {reason}"
 
-    return {"files": urls, "mode": req.mode.upper(), "scalar": scalar_name, "note": note}
+    stats_block = descriptive_stats(values, scalar_name=scalar_name)
+    if regions and len(regions) > 1:
+        stats_block["per_region"] = [
+            {"label": r["label"], "volume_cm3": r["volume_cm3"],
+             "boneness": r.get("boneness")} for r in regions]
+
+    return {"files": urls, "mode": req.mode.upper(), "scalar": scalar_name,
+            "stats": stats_block, "note": note}

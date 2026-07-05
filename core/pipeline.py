@@ -216,11 +216,28 @@ def _pick_bone_region(seg, arr, spacing, boneness):
 
 
 def _stats(v: np.ndarray) -> dict:
+    """Single-subject descriptive stats for a scalar field (thickness_mm).
+
+    Includes the p5/p25/p50/p75/p95 percentiles, the IQR, and the fraction of
+    vertices whose magnitude exceeds 1 mm / 2 mm — the article-quality
+    descriptive block the figures endpoint and Table-1 figure surface. Kept
+    matplotlib-free so it stays cheap on the analyze hot path.
+    """
+    v = np.asarray(v, dtype=np.float64).ravel()
+    v = v[np.isfinite(v)]
+    n = int(v.size)
+    p5, p25, p50, p75, p95 = (float(x) for x in np.percentile(v, [5, 25, 50, 75, 95]))
+    absv = np.abs(v)
     return {
-        "mean": round(float(np.mean(v)), 3), "median": round(float(np.median(v)), 3),
+        "mean": round(float(np.mean(v)), 3), "median": round(p50, 3),
         "sd": round(float(np.std(v)), 3), "rms": round(float(np.sqrt(np.mean(v ** 2))), 3),
         "min": round(float(np.min(v)), 3), "max": round(float(np.max(v)), 3),
-        "n": int(v.size),
+        "n": n,
+        "p5": round(p5, 3), "p25": round(p25, 3), "p50": round(p50, 3),
+        "p75": round(p75, 3), "p95": round(p95, 3),
+        "iqr": round(p75 - p25, 3),
+        "pct_over_1mm": round(100.0 * float(np.count_nonzero(absv > 1.0)) / n, 2) if n else 0.0,
+        "pct_over_2mm": round(100.0 * float(np.count_nonzero(absv > 2.0)) / n, 2) if n else 0.0,
     }
 
 
@@ -244,7 +261,9 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     mesh = mask_to_mesh(sub, spacing, smooth_iters=params.mesh_smooth_iters,
                         decimate_fraction=decimate,
                         close_iters=getattr(params, "mesh_close_iters", 0),
-                        supersample=getattr(params, "mesh_supersample", 1))
+                        supersample=getattr(params, "mesh_supersample", 1),
+                        reconstruct=getattr(params, "mesh_reconstruct", "raw"),
+                        reconstruct_target_verts=R.reconstruct_vertex_budget(sub.shape))
     verts = np.asarray(mesh.points)
     normals = np.asarray(mesh.point_normals)
 

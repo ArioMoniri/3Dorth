@@ -2377,3 +2377,47 @@ body {
   background: rgba(255, 255, 255, 0.95);
   color: var(--accent-2);
 }
+
+/* MPR-panel measure buttons: full-width inside the dark window/level cell and
+   the per-slice export-with-measures button under each panel's scrubber. */
+.mpr-wl .measure-toggle {
+  width: 100%;
+  margin-top: 6px;
+}
+.mpr-panel > .measure-export {
+  width: 100%;
+  margin-top: 6px;
+}
+
+/* Fig-2 annotation checkboxes in the Export panel: stack full-width, not the
+   two-column grid the format chips use. */
+.annotate-chip {
+  display: flex;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+/* Descriptive statistics block in the Statistics & figures section. */
+.stats-descriptive {
+  background: #fafafa;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.stats-descriptive-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #333;
+  margin-bottom: 4px;
+}
+.stats-descriptive-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}
