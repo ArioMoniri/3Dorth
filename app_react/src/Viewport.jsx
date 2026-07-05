@@ -189,10 +189,11 @@ export default function Viewport({
       interactor,
     });
     orientationWidget.setEnabled(true);
+    // bottom-RIGHT so it never collides with the bottom-left legend/stats/histogram card
     orientationWidget.setViewportCorner(
-      vtkOrientationMarkerWidget.Corners.BOTTOM_LEFT,
+      vtkOrientationMarkerWidget.Corners.BOTTOM_RIGHT,
     );
-    orientationWidget.setViewportSize(0.15);
+    orientationWidget.setViewportSize(0.13);
 
     // A cell picker ray-casts against the surface (robust on thin bone shells);
     // we then read the scalar at the picked cell's nearest vertex. A small

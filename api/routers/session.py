@@ -9,6 +9,7 @@ the side panel actually applies, and each side of a bilateral scan is selectable
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import uuid
 from pathlib import Path
@@ -176,9 +177,25 @@ async def upload(file: UploadFile = File(...)) -> dict:
     return _new_session(arr, spacing, meta)
 
 
-def _save_mesh(mesh, key: str) -> str:
+# Cap the vertex count of the mesh SHIPPED TO THE BROWSER so client-side vtk.js stays
+# smooth and the download over a tunnel is small. Stats are computed on the FULL mesh
+# (before this), so accuracy is unaffected — only the rendered surface is lighter.
+# Env-tunable; per-request override via the analyze/compare `render_max_verts` param.
+_RENDER_MAX_VERTS = int(os.getenv("THREEDORTH_RENDER_MAX_VERTS", "180000"))
+
+
+def _save_mesh(mesh, key: str, max_verts: int | None = None) -> str:
     fn = f"{key}.vtp"
-    mesh.save(str(CACHE / fn))
+    cap = _RENDER_MAX_VERTS if max_verts is None else int(max_verts)
+    out = mesh
+    try:
+        n = int(mesh.n_points)
+        if cap > 0 and n > cap:
+            frac = 1.0 - (cap / n)
+            out = mesh.triangulate().decimate_pro(frac)      # decimate_pro keeps point scalars
+    except Exception:  # noqa: BLE001 — never fail the request over decimation
+        out = mesh
+    out.save(str(CACHE / fn))
     return f"/api/session-geometry/{fn}"
 
 
