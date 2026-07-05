@@ -208,7 +208,7 @@ def reconstruct_surface(
     if mesh is None or mesh.n_points == 0:
         return mesh if mesh is not None else pv.PolyData()
 
-    src = mesh  # keep the pre-reconstruction surface as the scalar source of truth
+    src = mesh  # ORIGINAL full-res surface — scalar source of truth for the final resample
 
     # hole size scaled to the model so fill_holes closes real gaps, not the shell.
     try:
@@ -217,8 +217,25 @@ def reconstruct_surface(
         diag = 0.0
     hole_size = max(diag * 0.05, 1.0)
 
+    # Bound cost regardless of input resolution. A NATIVE-spacing marching-cubes shell
+    # can be MILLIONS of verts, and windowed-sinc + ACVD clustering on that is
+    # minutes / OOM — which drops the recompute ("Failed to fetch"). Pre-decimate to a
+    # few× the target so ACVD still has enough seed points but every step stays fast;
+    # the FINAL scalar resample below still reads from the full-res ``src`` for accuracy.
+    base = src
+    _cap = max(int(target_verts) * 6, 200_000)
+    if base.n_points > _cap:
+        try:
+            frac = 1.0 - (float(_cap) / float(base.n_points))
+            dec = base.triangulate().decimate_pro(float(frac), preserve_topology=True)
+            if dec is not None and dec.n_points:
+                _resample_point_scalars(base, dec)
+                base = dec
+        except Exception:  # noqa: BLE001
+            pass
+
     # 1) watertight repair
-    work = _make_watertight(src, hole_size)
+    work = _make_watertight(base, hole_size)
 
     # 2) windowed-sinc smoothing (shape-preserving; kills residual staircase)
     try:
