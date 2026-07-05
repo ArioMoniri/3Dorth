@@ -13,6 +13,8 @@
 //                          /api/parameters (subset for the active mode); grouped
 //                          by `group`. NOTHING is hardcoded per key.
 
+import { useState } from 'react';
+
 import ParameterControl from './ParameterControl';
 import ExportPanel from './ExportPanel';
 import ManualAnchor from './ManualAnchor';
@@ -103,6 +105,7 @@ export default function ControlPanel({
   const meta = session?.meta ?? {};
   const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
+  const [showHelp, setShowHelp] = useState(true);
 
   return (
     <aside className="panel">
@@ -158,6 +161,55 @@ export default function ControlPanel({
             Mesh upload: thickness (Mode A) needs a CT volume, so this session is
             limited to viewing and Mode-B deviation vs another surface.
           </p>
+        )}
+
+        {/* Comparison roles — visible right after upload, assignable any time. */}
+        {!isMesh && sides.length >= 2 && (
+          <div className="roles-card">
+            <div className="roles-card-title">Comparison roles (Mode B)</div>
+            <p className="panel-hint roles-hint">
+              Mode B measures the <b title="the surface being assessed">target</b> against
+              the <b title="the baseline surface, deviation = 0 mm on it">reference</b>{' '}
+              baseline: <b>+ = target outside reference (red)</b>,{' '}
+              <b>− = inside (green)</b>. Swapping the two flips the sign and colours.
+            </p>
+            <label className="ctl ctl-enum">
+              <span className="ctl-label">Reference (baseline)</span>
+              <select
+                value={referenceSide ?? ''}
+                onChange={(e) => onReferenceSideChange(e.target.value)}
+              >
+                {sides.map((s) => (
+                  <option key={s} value={s}>{prettySide(s)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="ctl ctl-enum">
+              <span className="ctl-label">Target (measured)</span>
+              <select
+                value={targetSide ?? ''}
+                onChange={(e) => onTargetSideChange(e.target.value)}
+              >
+                {sides.map((s) => (
+                  <option key={s} value={s}>{prettySide(s)}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="swap-sides-btn"
+              onClick={onSwapSides}
+              disabled={!referenceSide || referenceSide === targetSide}
+              title="Swap reference and target — flips the deviation sign and the red/green colours"
+            >
+              ⇄ Swap reference / target
+            </button>
+            <div className="roles-current">
+              Using: <strong>Reference = {prettySide(referenceSide)}</strong> ·{' '}
+              <strong>Target = {prettySide(targetSide)}</strong>
+              {meta.series ? ` · ${meta.series}` : ''}
+            </div>
+          </div>
         )}
       </section>
 
@@ -413,9 +465,19 @@ export default function ControlPanel({
             Reset to defaults
           </button>
         </div>
-        <p className="panel-hint">
-          {controls.length} controls for this mode — generated from the registry.
-        </p>
+        <div className="params-head-row">
+          <p className="panel-hint">
+            {controls.length} controls for this mode — generated from the registry.
+          </p>
+          <label className="show-help-toggle" title="Show an explanation under every control">
+            <input
+              type="checkbox"
+              checked={showHelp}
+              onChange={(e) => setShowHelp(e.target.checked)}
+            />
+            <span>Show explanations</span>
+          </label>
+        </div>
         {groups.map((group) => (
           <details key={group} open className="param-group">
             <summary>{group}</summary>
@@ -426,6 +488,7 @@ export default function ControlPanel({
                   spec={spec}
                   value={values[spec.key]}
                   onChange={(v) => onParamChange(spec.key, v)}
+                  showHelp={showHelp}
                 />
               ))}
             </div>
