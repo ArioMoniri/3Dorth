@@ -114,6 +114,8 @@ export default function App() {
   // Bumped to tell the Viewport to restore the full mesh after a component isolate
   // (on "Reset clip" or when clipping is turned off).
   const [isolateResetSeq, setIsolateResetSeq] = useState(0);
+  // Bumped by the "Center view" button to reframe the 3D camera on the geometry.
+  const [resetViewSeq, setResetViewSeq] = useState(0);
   const [visibleMask, setVisibleMask] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
@@ -981,7 +983,14 @@ export default function App() {
                 <button
                   key={m}
                   className={mode === m ? 'active' : ''}
-                  onClick={() => setMode(m)}
+                  onClick={() => {
+                    setMode(m);
+                    // Mode B IS the comparison mode — land straight on the
+                    // deviation sub-view (reference/target + swap + red/green)
+                    // when the scan can be compared, instead of hiding it behind
+                    // the "Per-side thickness" sub-toggle.
+                    if (m === 'B' && canCompareSides) setModeBView('deviation');
+                  }}
                 >
                   Mode {m}
                 </button>
@@ -1101,6 +1110,15 @@ export default function App() {
             </div>
             <button
               type="button"
+              className="center-view-btn"
+              onClick={() => setResetViewSeq((s) => s + 1)}
+              disabled={!displayGeometry || (centerView !== 'map' && centerView !== 'oblique')}
+              title="Centre & frame the object in view (also: shift-drag to pan, scroll to zoom)"
+            >
+              Center view
+            </button>
+            <button
+              type="button"
               className={`clip-toggle-btn${clipEnabled ? ' active' : ''}`}
               onClick={() => onToggleClip(!clipEnabled)}
               disabled={!displayGeometry || centerView !== 'map' || isBoth}
@@ -1171,6 +1189,7 @@ export default function App() {
             }
             clipIsolate={clipEnabled && !isBoth}
             isolateResetSeq={isolateResetSeq}
+            resetViewSeq={resetViewSeq}
           />
 
           {displayGeometry && (
@@ -1268,6 +1287,22 @@ export default function App() {
                     referenceSide,
                   )}`}
                 />
+                <div className="legend-swap-row">
+                  <span className="legend-swap-info">
+                    <strong>Target</strong> {cap(targetSide)} · <strong>Reference</strong>{' '}
+                    {cap(referenceSide)}
+                    {session?.meta?.series ? ` · ${session.meta.series}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="legend-swap-btn"
+                    onClick={swapSides}
+                    disabled={referenceSide === targetSide}
+                    title="Swap reference / target — inverts the red/green (sign) and recomputes"
+                  >
+                    ⇄ Swap
+                  </button>
+                </div>
               </DraggablePanel>
             )}
             <DraggablePanel className="dp-stats">

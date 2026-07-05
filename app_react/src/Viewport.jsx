@@ -193,6 +193,32 @@ function buildComponentPolydata(full, mask) {
   return sub;
 }
 
+// ---- camera pan (grab & drag the scene) ---------------------------------- //
+function _norm3(v) { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+function _cross3(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+// Translate the camera + focal point together so the object follows the cursor
+// by (dx, dy) CSS pixels — zoom and view direction are unchanged.
+function panCamera(ctx, el, dx, dy) {
+  const cam = ctx.renderer.getActiveCamera();
+  const h = el.getBoundingClientRect().height || 1;
+  const wpp = cam.getParallelProjection()
+    ? (2 * cam.getParallelScale()) / h
+    : (2 * cam.getDistance() * Math.tan((cam.getViewAngle() * Math.PI) / 360)) / h;
+  const pos = cam.getPosition();
+  const fp = cam.getFocalPoint();
+  const up = cam.getViewUp();
+  const dir = _norm3([fp[0] - pos[0], fp[1] - pos[1], fp[2] - pos[2]]);
+  const right = _norm3(_cross3(dir, up));
+  const trueUp = _cross3(right, dir);
+  const t = [0, 1, 2].map((i) => right[i] * (-dx * wpp) + trueUp[i] * (dy * wpp));
+  cam.setPosition(pos[0] + t[0], pos[1] + t[1], pos[2] + t[2]);
+  cam.setFocalPoint(fp[0] + t[0], fp[1] + t[1], fp[2] + t[2]);
+  ctx.renderer.resetCameraClippingRange();
+  ctx.renderWindow.render();
+}
+
 // Find the point id of the cell vertex closest to the pick hit. The picker
 // gives us a cell id and the world position of the hit; we walk the polys
 // connectivity to find that cell's point ids and return whichever is nearest
@@ -313,6 +339,7 @@ export default function Viewport({
   onPlaneDrag,
   clipIsolate = false,
   isolateResetSeq = 0,
+  resetViewSeq = 0,
 }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
@@ -524,6 +551,16 @@ export default function Viewport({
 
     const onMove = (e) => {
       const ctx = contextRef.current;
+      // ---- panning: translate the camera so the object follows the cursor -----
+      if (ctx && ctx.panDrag) {
+        const dx = e.clientX - ctx.panDrag.lastX;
+        const dy = e.clientY - ctx.panDrag.lastY;
+        ctx.panDrag.lastX = e.clientX;
+        ctx.panDrag.lastY = e.clientY;
+        panCamera(ctx, el, dx, dy);
+        onHoverRef.current?.(null);
+        return;
+      }
       // ---- dragging the cutting plane: slide it along its own normal ---------
       if (ctx && ctx.planeDrag) {
         const dyPx = ctx.planeDrag.lastY - e.clientY; // up = positive
@@ -550,11 +587,13 @@ export default function Viewport({
     let downT = 0;
     const endPlaneDrag = () => {
       const ctx = contextRef.current;
-      if (ctx && ctx.planeDrag) {
-        // restore the camera interactor style we suspended during the grab.
-        if (ctx.planeDrag.style !== undefined) ctx.interactor.setInteractorStyle(ctx.planeDrag.style);
-        ctx.planeDrag = null;
-        el.style.cursor = '';
+      // Restore the camera interactor style suspended during a plane grab OR a pan.
+      for (const key of ['planeDrag', 'panDrag']) {
+        if (ctx && ctx[key]) {
+          if (ctx[key].style !== undefined) ctx.interactor.setInteractorStyle(ctx[key].style);
+          ctx[key] = null;
+          el.style.cursor = '';
+        }
       }
     };
     const onDown = (e) => {
@@ -562,6 +601,15 @@ export default function Viewport({
       downY = e.clientY;
       downT = Date.now();
       const ctx = contextRef.current;
+      // Shift + left-drag = PAN (grab & drag the object across the screen) — works
+      // on trackpads with no middle button. Suspend orbit for the gesture.
+      if (e.button === 0 && e.shiftKey && ctx && ctx.renderer) {
+        ctx.panDrag = { lastX: e.clientX, lastY: e.clientY, style: ctx.interactor.getInteractorStyle() };
+        ctx.interactor.setInteractorStyle(null);
+        el.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
       // Grab the plane only when it's actually shown (oblique mode) and the click
       // lands on it (closest hit). Suspend camera orbit for the duration so the
       // drag slides the plane instead of rotating the scene.
@@ -582,7 +630,7 @@ export default function Viewport({
     const onUp = (e) => {
       if (e.button !== 0) return;
       const ctx = contextRef.current;
-      if (ctx && ctx.planeDrag) { endPlaneDrag(); return; }
+      if (ctx && (ctx.planeDrag || ctx.panDrag)) { endPlaneDrag(); return; }
       const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
       if (moved > 5 || Date.now() - downT > 500) return; // a drag, not a click
       if (!ctx || !ctx.actor || !ctx.polydata) return;
@@ -759,6 +807,16 @@ export default function Viewport({
     geometry?.colormap,
     colorSmoothIters,
   ]);
+
+  // ---- reset / centre the camera to frame the geometry (toolbar button) -----
+  useEffect(() => {
+    if (!resetViewSeq) return; // skip the initial mount
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.renderer) return;
+    ctx.renderer.resetCamera();
+    ctx.renderWindow?.render();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetViewSeq]);
 
   // ---- restore the full mesh after a component isolate (Reset clip / clip off)
   useEffect(() => {
