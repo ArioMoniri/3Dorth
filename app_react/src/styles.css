@@ -389,8 +389,20 @@ body {
   flex-direction: column;
   align-items: flex-end;
   gap: 12px;
+  /* The docked column scrolls when the stacked panels exceed the viewport, so
+     every panel (incl. an expanded figures stack) stays reachable. A panel that
+     the user DRAGS pops out to position:fixed (see DraggablePanel), so it escapes
+     this clip instead of vanishing ("legends disappear when dragged"). */
   max-height: calc(100% - 36px);
   overflow-y: auto;
+  pointer-events: none; /* let 3D-view drags pass through the gaps; panels re-enable it */
+}
+.right-overlay > * {
+  pointer-events: auto;
+  /* Never let the flex column compress a panel below its content — a squished
+     panel makes its inner (fixed-height) figure body overflow the panel border
+     ("last plot out of the outline"). Each panel caps + scrolls on its own. */
+  flex-shrink: 0;
 }
 
 .legend {
@@ -848,9 +860,9 @@ body {
 .stats-figures-body {
   padding: 4px 14px 14px;
   border-top: 1px solid var(--border);
-  /* scroll so ALL figures + the export controls are reachable, not just the first */
-  max-height: 62vh;
-  overflow-y: auto;
+  /* No independent scroll here: the enclosing .draggable-panel is the SINGLE
+     scroll container (capped to the viewport). A second nested scroll made the
+     body outgrow a squished panel and push the last figure past the outline. */
   overscroll-behavior: contain;
 }
 
@@ -2357,6 +2369,16 @@ body {
   overflow: auto;
   min-width: 130px;
   max-width: 96vw;
+}
+/* When popped out of the docked column (being dragged / moved), the panel floats
+   free of the overlay's clip and caps itself to the viewport so a tall figures
+   stack scrolls INSIDE its own outline instead of running off the screen. */
+.draggable-panel.is-floating {
+  position: fixed;
+  margin: 0;
+  z-index: 40;
+  max-height: calc(100vh - 32px);
+  max-width: 92vw;
 }
 .draggable-panel > .drag-handle {
   position: absolute;
