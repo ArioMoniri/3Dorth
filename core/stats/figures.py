@@ -85,7 +85,10 @@ def distribution_histogram_bytes(
     median = float(np.median(v))
 
     with plt.rc_context(_THEME):
-        fig, ax = plt.subplots(figsize=(6.4, 4.4), dpi=dpi)
+        # constrained_layout keeps the title/axis-labels/legend inside the canvas —
+        # without it, and because _fig_to_bytes reads the raw canvas buffer (no
+        # bbox_inches="tight"), long labels clip at the lower-left edge.
+        fig, ax = plt.subplots(figsize=(6.4, 4.4), dpi=dpi, constrained_layout=True)
         ax.hist(v, bins=n_bins, color=_PALETTE[0], edgecolor="black",
                 linewidth=0.4, alpha=0.85, zorder=2)
         ax.axvline(mean, color=_PALETTE[1], linewidth=2.0, linestyle="-",
@@ -131,7 +134,8 @@ def per_region_summary_bytes(
     cols = [_PALETTE[i % len(_PALETTE)] for i in range(len(names))]
 
     with plt.rc_context(_THEME):
-        fig, ax = plt.subplots(figsize=(max(5, 1.2 * len(names)), 4.4), dpi=dpi)
+        fig, ax = plt.subplots(figsize=(max(5, 1.2 * len(names)), 4.4), dpi=dpi,
+                               constrained_layout=True)
         bars = ax.bar(xpos, vols, width=0.6, color=cols, edgecolor="black",
                       linewidth=0.7, alpha=0.9, zorder=2)
         for bar, b in zip(bars, bones):

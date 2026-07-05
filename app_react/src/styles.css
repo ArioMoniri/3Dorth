@@ -848,6 +848,10 @@ body {
 .stats-figures-body {
   padding: 4px 14px 14px;
   border-top: 1px solid var(--border);
+  /* scroll so ALL figures + the export controls are reachable, not just the first */
+  max-height: 62vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .stats-figures-grid {
@@ -869,6 +873,70 @@ body {
   display: block;
   width: 100%;
   height: auto;
+  cursor: zoom-in;
+  transition: opacity 0.12s ease;
+}
+.stats-figure img:hover,
+.stats-figure img:focus-visible {
+  opacity: 0.9;
+  outline: 2px solid var(--accent, #4f46e5);
+  outline-offset: -2px;
+}
+
+/* click-to-enlarge lightbox */
+.figure-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(15, 18, 28, 0.72);
+  backdrop-filter: blur(2px);
+  cursor: zoom-out;
+}
+.figure-lightbox-inner {
+  position: relative;
+  max-width: 96vw;
+  max-height: 92vh;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  cursor: default;
+}
+.figure-lightbox-inner img {
+  display: block;
+  max-width: 96vw;
+  max-height: 84vh;
+  width: auto;
+  height: auto;
+}
+.figure-lightbox-cap {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted, #555);
+  border-top: 1px solid var(--border, #e5e7eb);
+  background: #fbfbfd;
+}
+.figure-lightbox-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+.figure-lightbox-close:hover {
+  background: rgba(0, 0, 0, 0.8);
 }
 
 .stats-figure figcaption {

@@ -38,6 +38,7 @@ export default function StatsFigures({
   const [error, setError] = useState(null);
   const [figures, setFigures] = useState(null); // { name: base64 png }
   const [note, setNote] = useState(null);
+  const [zoomed, setZoomed] = useState(null); // { name, b64 } shown enlarged in a lightbox
 
   const [formats, setFormats] = useState(() => new Set(['png']));
   const [dpi, setDpi] = useState(300);
@@ -124,6 +125,7 @@ export default function StatsFigures({
   }
 
   return (
+    <>
     <details
       className="stats-figures panel-section-details"
       open={open}
@@ -152,6 +154,13 @@ export default function StatsFigures({
                   <img
                     src={`data:image/png;base64,${b64}`}
                     alt={FIGURE_TITLES[name] || name}
+                    title="Click to enlarge"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setZoomed({ name, b64 })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') setZoomed({ name, b64 });
+                    }}
                   />
                   <figcaption>{FIGURE_TITLES[name] || name}</figcaption>
                 </figure>
@@ -227,6 +236,36 @@ export default function StatsFigures({
         )}
       </div>
     </details>
+
+    {/* click-to-enlarge lightbox — full figure at readable size, click/Esc to close */}
+    {zoomed && (
+      <div
+        className="figure-lightbox"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${FIGURE_TITLES[zoomed.name] || zoomed.name} (enlarged)`}
+        onClick={() => setZoomed(null)}
+        onKeyDown={(e) => { if (e.key === 'Escape') setZoomed(null); }}
+        tabIndex={-1}
+        ref={(el) => el && el.focus()}
+      >
+        <div className="figure-lightbox-inner" onClick={(e) => e.stopPropagation()}>
+          <button
+            className="figure-lightbox-close"
+            aria-label="Close"
+            onClick={() => setZoomed(null)}
+          >
+            ×
+          </button>
+          <img
+            src={`data:image/png;base64,${zoomed.b64}`}
+            alt={FIGURE_TITLES[zoomed.name] || zoomed.name}
+          />
+          <div className="figure-lightbox-cap">{FIGURE_TITLES[zoomed.name] || zoomed.name}</div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
