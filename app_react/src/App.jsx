@@ -449,15 +449,18 @@ export default function App() {
   // convert it to voxel indices (the SAME arithmetic the trame path uses), push
   // that crosshair into the MPR, place the 3D marker, and reveal the images.
   const pickSeqRef = useRef(0);
-  async function onSurfacePick(worldXyz) {
-    // Clip / isolate: when the clip box is on (single side only), clicking the
-    // surface RE-CENTRES the box on the picked part so you can "click the bit you
-    // want" instead of nudging six sliders. Keeps the box's current size if you
-    // already shrank it; otherwise seeds a sensible sub-region around the pick.
-    // Done FIRST so it works even for mesh uploads (no MPR side) — the guard below
-    // only gates the MPR crosshair round-trip, not the clip.
+  async function onSurfacePick(worldXyz, component) {
+    // Clip / isolate: when the clip box is on (single side only), clicking a bone
+    // isolates the WHOLE connected piece you clicked — the box snaps to that
+    // component's bounds (dropping detached fragments), so "click the part you
+    // want" actually keeps that part instead of carving an axis-box sliver out of
+    // a diagonal bone. Falls back to a centred sub-region if connectivity is
+    // unavailable. Done FIRST so it works even for mesh uploads (no MPR side).
     if (clipEnabled && !isBoth && meshBounds) {
-      const nextBox = clipBoxFromPick(worldXyz);
+      const nextBox =
+        component && Array.isArray(component.bounds)
+          ? clipBoxFromComponent(component.bounds)
+          : clipBoxFromPick(worldXyz);
       if (nextBox) setClipBox(nextBox);
     }
     // Show the marker at the exact picked point (no round-trip lag).
@@ -817,6 +820,21 @@ export default function App() {
       out[`${keys[a]}max`] = cmax;
     }
     return out;
+  }
+
+  // Clip box = the clicked connected component's bounds (+ a small margin so the
+  // surface isn't shaved at the edge), clamped to the mesh. This is what makes
+  // "click to isolate the humerus" keep the whole humerus and drop other pieces.
+  function clipBoxFromComponent(cb) {
+    if (!meshBounds || !Array.isArray(cb) || cb.length < 6) return null;
+    const [Xmin, Xmax, Ymin, Ymax, Zmin, Zmax] = meshBounds;
+    const [x0, x1, y0, y1, z0, z1] = cb;
+    const m = (lo, hi) => (hi - lo) * 0.03 + 0.5; // ~3% + 0.5 mm breathing room
+    return {
+      xmin: Math.max(Xmin, x0 - m(x0, x1)), xmax: Math.min(Xmax, x1 + m(x0, x1)),
+      ymin: Math.max(Ymin, y0 - m(y0, y1)), ymax: Math.min(Ymax, y1 + m(y0, y1)),
+      zmin: Math.max(Zmin, z0 - m(z0, z1)), zmax: Math.min(Zmax, z1 + m(z0, z1)),
+    };
   }
 
   const totalVertexCount = scalarValues ? scalarValues.length : null;

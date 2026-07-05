@@ -111,6 +111,35 @@ function colorArrayForDisplay(ctx, polydata, scalarName, iters, adjKey = 'adjace
   return displayName;
 }
 
+// Flood-fill the connected component that contains `startPid` (via the one-ring
+// adjacency) and return its world-space bounds [xmin,xmax,ymin,ymax,zmin,zmax].
+// Used by click-to-isolate so clipping snaps to the WHOLE piece you clicked (e.g.
+// the humerus, dropping detached fragments) instead of an arbitrary axis box.
+function componentBoundsFromPoint(polydata, adjacency, startPid) {
+  const n = polydata.getNumberOfPoints();
+  if (startPid == null || startPid < 0 || startPid >= n) return null;
+  const pts = polydata.getPoints().getData();
+  const seen = new Uint8Array(n);
+  const stack = [startPid];
+  seen[startPid] = 1;
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity, zmin = Infinity, zmax = -Infinity;
+  let count = 0;
+  while (stack.length) {
+    const v = stack.pop();
+    const x = pts[v * 3], y = pts[v * 3 + 1], z = pts[v * 3 + 2];
+    if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+    if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+    count += 1;
+    const nb = adjacency[v];
+    if (nb) for (let k = 0; k < nb.length; k += 1) {
+      const w = nb[k];
+      if (!seen[w]) { seen[w] = 1; stack.push(w); }
+    }
+  }
+  return { bounds: [xmin, xmax, ymin, ymax, zmin, zmax], count };
+}
+
 // Find the point id of the cell vertex closest to the pick hit. The picker
 // gives us a cell id and the world position of the hit; we walk the polys
 // connectivity to find that cell's point ids and return whichever is nearest
@@ -502,7 +531,18 @@ export default function Viewport({
       if (!ctx || !ctx.actor || !ctx.polydata) return;
       const hit = pickActorAt(e.clientX, e.clientY);
       if (!hit.actor || hit.cellId < 0) return;
-      onPickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]]);
+      // When the click lands on the PRIMARY bone, also report the connected
+      // component under the cursor so click-to-isolate can clip to the whole
+      // piece (not an axis-box sliver of a diagonal bone).
+      let component = null;
+      if (hit.actor === ctx.actor) {
+        const pid = pickedPointId(ctx.polydata, hit.cellId, hit.pos);
+        if (pid != null) {
+          if (!ctx.adjacency) ctx.adjacency = buildVertexAdjacency(ctx.polydata);
+          component = componentBoundsFromPoint(ctx.polydata, ctx.adjacency, pid);
+        }
+      }
+      onPickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]], component);
     };
     el.addEventListener('mousedown', onDown);
     el.addEventListener('mouseup', onUp);
