@@ -31,15 +31,30 @@ _tcp_open() {  # host port -> 0 if a TCP connect succeeds within 6s
   else (exec 3<>/dev/tcp/$1/$2) 2>/dev/null; fi
 }
 
+# Actually verify a Cloudflare tunnel REGISTERS (the 7844 data plane), not just that a
+# TCP connect to :7844 succeeds — on locked-down pods the connect works but the tunnel
+# never registers and every request 1033s. ~14s worst case; instant when it works.
+_cf_works() {
+  command -v cloudflared >/dev/null 2>&1 || return 1
+  _tcp_open region1.v2.argotunnel.com 7844 || return 1     # fast pre-filter
+  local log pid i=0; log="$(mktemp)"
+  ( cloudflared tunnel --url http://127.0.0.1:1 --protocol http2 --no-autoupdate >"$log" 2>&1 ) & pid=$!
+  while [ "$i" -lt 14 ]; do
+    grep -q "Registered tunnel connection" "$log" 2>/dev/null && { kill "$pid" 2>/dev/null; rm -f "$log"; return 0; }
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1; i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null; rm -f "$log"; return 1
+}
+
 detect_provider() {
   [ -n "${TUNNEL_PROVIDER:-}" ] && { echo "$TUNNEL_PROVIDER"; return; }
-  # cloudflare only if 7844 is actually reachable (often firewalled)
-  if command -v cloudflared >/dev/null 2>&1 && _tcp_open region1.v2.argotunnel.com 7844; then echo cloudflare; return; fi
-  # ngrok next when configured — no session time limit, clean URL, TLS-over-443
+  # ngrok first when configured (stable, no time limit, clean URL, TLS-over-443)
   if command -v ngrok >/dev/null 2>&1 && ngrok config check >/dev/null 2>&1; then echo ngrok; return; fi
-  # pinggy last (no account, but 60-min sessions + a visitor splash page)
+  # cloudflare only if a tunnel actually registers (not just a TCP-open on 7844)
+  if _cf_works; then echo cloudflare; return; fi
+  # pinggy over 443 — reliable on firewalled pods (60-min sessions + a visitor splash)
   if command -v ssh >/dev/null 2>&1 && _tcp_open a.pinggy.io 443; then echo pinggy; return; fi
-  if command -v cloudflared >/dev/null 2>&1; then echo cloudflare; return; fi   # last resort
   echo off
 }
 
