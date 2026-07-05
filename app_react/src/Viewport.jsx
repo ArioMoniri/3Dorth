@@ -30,6 +30,7 @@ import vtkSphereSource from '@kitware/vtk.js/Filters/Sources/SphereSource';
 import vtkPlaneSource from '@kitware/vtk.js/Filters/Sources/PlaneSource';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
+import vtkPolyData from '@kitware/vtk.js/Common/DataModel/PolyData';
 
 import { fetchGeometryArrayBuffer } from './api';
 import { buildDiscreteLUT } from './colors';
@@ -119,9 +120,9 @@ function componentBoundsFromPoint(polydata, adjacency, startPid) {
   const n = polydata.getNumberOfPoints();
   if (startPid == null || startPid < 0 || startPid >= n) return null;
   const pts = polydata.getPoints().getData();
-  const seen = new Uint8Array(n);
+  const mask = new Uint8Array(n);
   const stack = [startPid];
-  seen[startPid] = 1;
+  mask[startPid] = 1;
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity, zmin = Infinity, zmax = -Infinity;
   let count = 0;
   while (stack.length) {
@@ -134,10 +135,55 @@ function componentBoundsFromPoint(polydata, adjacency, startPid) {
     const nb = adjacency[v];
     if (nb) for (let k = 0; k < nb.length; k += 1) {
       const w = nb[k];
-      if (!seen[w]) { seen[w] = 1; stack.push(w); }
+      if (!mask[w]) { mask[w] = 1; stack.push(w); }
     }
   }
-  return { bounds: [xmin, xmax, ymin, ymax, zmin, zmax], count };
+  return { bounds: [xmin, xmax, ymin, ymax, zmin, zmax], count, total: n, mask };
+}
+
+// Build a NEW polydata containing only the cells whose vertices are all in the
+// component `mask` (remapped point indices + every point-data array copied for
+// the kept vertices). Used to render ONLY the clicked connected piece.
+function buildComponentPolydata(full, mask) {
+  const pts = full.getPoints().getData();
+  const polys = full.getPolys().getData();
+  const n = mask.length;
+  const remap = new Int32Array(n).fill(-1);
+  let nk = 0;
+  for (let i = 0; i < n; i += 1) if (mask[i]) remap[i] = nk++;
+  const newPts = new Float32Array(nk * 3);
+  for (let i = 0, j = 0; i < n; i += 1) if (mask[i]) {
+    newPts[j * 3] = pts[i * 3]; newPts[j * 3 + 1] = pts[i * 3 + 1]; newPts[j * 3 + 2] = pts[i * 3 + 2]; j += 1;
+  }
+  const newPolys = [];
+  let p = 0;
+  while (p < polys.length) {
+    const c = polys[p];
+    let keep = true;
+    for (let a = 1; a <= c; a += 1) if (!mask[polys[p + a]]) { keep = false; break; }
+    if (keep) { newPolys.push(c); for (let a = 1; a <= c; a += 1) newPolys.push(remap[polys[p + a]]); }
+    p += c + 1;
+  }
+  const sub = vtkPolyData.newInstance();
+  sub.getPoints().setData(newPts, 3);
+  sub.getPolys().setData(Uint32Array.from(newPolys));
+  // carry every point-data array (thickness_mm, normals, …) for the kept verts
+  const pd = full.getPointData();
+  for (let ai = 0; ai < pd.getNumberOfArrays(); ai += 1) {
+    const src = pd.getArrayByIndex(ai);
+    if (!src) continue;
+    const comps = src.getNumberOfComponents();
+    const sdata = src.getData();
+    const ndata = new Float32Array(nk * comps);
+    for (let i = 0, j = 0; i < n; i += 1) if (mask[i]) {
+      for (let c = 0; c < comps; c += 1) ndata[j * comps + c] = sdata[i * comps + c];
+      j += 1;
+    }
+    sub.getPointData().addArray(vtkDataArray.newInstance({
+      name: src.getName(), numberOfComponents: comps, values: ndata,
+    }));
+  }
+  return sub;
 }
 
 // Find the point id of the cell vertex closest to the pick hit. The picker
@@ -258,9 +304,13 @@ export default function Viewport({
   onVisibleMask,
   colorSmoothIters = 0,
   onPlaneDrag,
+  clipIsolate = false,
+  isolateResetSeq = 0,
 }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
+  const clipIsolateRef = useRef(clipIsolate);
+  clipIsolateRef.current = clipIsolate;
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
   const onPickRef = useRef(onPick);
@@ -543,6 +593,24 @@ export default function Viewport({
         }
       }
       onPickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]], component);
+      // TRUE isolate: in isolate mode, render ONLY the clicked connected piece
+      // (drops everything not connected to it, regardless of position). Reversible
+      // via the reset signal below.
+      if (clipIsolateRef.current && component && component.mask &&
+          component.count < component.total && ctx.mapper && ctx.recolor) {
+        const sub = buildComponentPolydata(ctx.polydata, component.mask);
+        if (sub.getNumberOfPoints() > 0) {
+          ctx.mapper.setInputData(sub);
+          ctx.polydata = sub;
+          ctx.isolated = true;
+          ctx.adjacency = null; // the sub-mesh has its own topology
+          ctx.recolor(sub);
+          onBoundsRef.current?.(sub.getBounds());
+          const sc = sub.getPointData().getArrayByName(ctx.scalarName);
+          onScalarDataRef.current?.(sc ? sc.getData() : null);
+          ctx.renderWindow?.render();
+        }
+      }
     };
     el.addEventListener('mousedown', onDown);
     el.addEventListener('mouseup', onUp);
@@ -622,6 +690,8 @@ export default function Viewport({
         ctx.mapper.setInputData(polydata);
         renderer.addActor(ctx.actor);
         ctx.polydata = polydata;
+        ctx.fullPolydata = polydata; // the complete mesh (for restoring after isolate)
+        ctx.isolated = false;
         ctx.lastUrl = geometry.url;
         ctx.adjacency = null; // topology changed — invalidate the smoothing graph
         // A new geometry means a brand-new vtkMapper instance with no clipping
@@ -635,31 +705,32 @@ export default function Viewport({
       if (!ctx.mapper) return;
       ctx.scalarName = geometry.scalar;
 
-      // Hand the active scalar's full per-vertex array up to the parent (for
-      // the Stats panel histogram) — read straight from the loaded polydata,
-      // no new fetch.
-      const scalarArr = ctx.polydata?.getPointData().getArrayByName(geometry.scalar);
-      onScalarDataRef.current?.(scalarArr ? scalarArr.getData() : null);
-
-      const lut = buildDiscreteLUT({
-        rangeMin: geometry.rangeMin,
-        rangeMax: geometry.rangeMax,
-        steps: geometry.steps,
-        reverse: geometry.reverse,
-        colormap: geometry.colormap,
-      });
-
-      ctx.mapper.setLookupTable(lut);
-      ctx.mapper.setUseLookupTableScalarRange(true);
-      ctx.mapper.setScalarRange(geometry.rangeMin, geometry.rangeMax);
-      ctx.mapper.setColorModeToMapScalars();
-      ctx.mapper.setScalarModeToUsePointFieldData();
-      // Colour by the smoothed DISPLAY copy when colour smoothing is on; hover +
-      // the scalar array handed to the Stats panel still read the raw values.
-      ctx.mapper.setColorByArrayName(
-        colorArrayForDisplay(ctx, ctx.polydata, geometry.scalar, colorSmoothIters),
-      );
-      ctx.mapper.setInterpolateScalarsBeforeMapping(true);
+      // Reusable re-colour so the SAME LUT/smoothing applies after the mapper
+      // input is swapped between the full mesh and an isolated component. Also
+      // hands the active raw scalar array up for the Stats histogram.
+      ctx.recolor = (poly) => {
+        if (!poly) return;
+        const arr = poly.getPointData().getArrayByName(geometry.scalar);
+        onScalarDataRef.current?.(arr ? arr.getData() : null);
+        const lut = buildDiscreteLUT({
+          rangeMin: geometry.rangeMin, rangeMax: geometry.rangeMax,
+          steps: geometry.steps, reverse: geometry.reverse, colormap: geometry.colormap,
+        });
+        ctx.mapper.setLookupTable(lut);
+        ctx.mapper.setUseLookupTableScalarRange(true);
+        ctx.mapper.setScalarRange(geometry.rangeMin, geometry.rangeMax);
+        ctx.mapper.setColorModeToMapScalars();
+        ctx.mapper.setScalarModeToUsePointFieldData();
+        // Colour by the smoothed DISPLAY copy (full mesh only) — hover + the Stats
+        // scalar still read the raw values; an isolated component colours by raw.
+        ctx.mapper.setColorByArrayName(
+          poly === ctx.fullPolydata
+            ? colorArrayForDisplay(ctx, poly, geometry.scalar, colorSmoothIters)
+            : geometry.scalar,
+        );
+        ctx.mapper.setInterpolateScalarsBeforeMapping(true);
+      };
+      ctx.recolor(ctx.polydata);
 
       if (cancelled) return;
       applyCameraPose(ctx, isNewGeometry);
@@ -681,6 +752,22 @@ export default function Viewport({
     geometry?.colormap,
     colorSmoothIters,
   ]);
+
+  // ---- restore the full mesh after a component isolate (Reset clip / clip off)
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.isolated || !ctx.fullPolydata || !ctx.mapper || !ctx.recolor) return;
+    ctx.mapper.setInputData(ctx.fullPolydata);
+    ctx.polydata = ctx.fullPolydata;
+    ctx.isolated = false;
+    ctx.adjacency = null;
+    ctx.recolor(ctx.fullPolydata);
+    onBoundsRef.current?.(ctx.fullPolydata.getBounds());
+    const sc = ctx.fullPolydata.getPointData().getArrayByName(ctx.scalarName);
+    onScalarDataRef.current?.(sc ? sc.getData() : null);
+    ctx.renderWindow?.render();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isolateResetSeq]);
 
   // ---- optional SECOND mesh (bilateral "Both" view) -------------------------
   // Loads/updates a second actor coloured by its own side's thickness with the

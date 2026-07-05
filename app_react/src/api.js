@@ -100,9 +100,10 @@ export async function uploadFile(file) {
 }
 
 // POST /api/session/{sid}/analyze -> thickness result for one side.
-export function analyze(sessionId, { side, regionLabel, params }) {
+export function analyze(sessionId, { side, regionLabel, params, wholeBone }) {
   const body = { side, params };
   if (regionLabel != null) body.region_label = regionLabel;
+  if (wholeBone) body.whole_bone = true;
   return postJSON(`/api/session/${sessionId}/analyze`, body);
 }
 

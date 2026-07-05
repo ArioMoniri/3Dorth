@@ -241,9 +241,14 @@ def _stats(v: np.ndarray) -> dict:
     }
 
 
-def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 0.0, 0.0)) -> dict:
+def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 0.0, 0.0),
+                      whole_bone=False) -> dict:
     """Segment with the current params, pick/keep a region, compute its cortical
-    thickness map, and return a world-placed mesh + stats + the region list."""
+    thickness map, and return a world-placed mesh + stats + the region list.
+
+    ``whole_bone=True`` meshes EVERY bone region together (the whole side) instead
+    of a single connected component — used by the bilateral "Both" view so each
+    side loads completely, not just its largest piece."""
     seg = segment_bone(arr, spacing, params)
     if seg.n_regions == 0:
         raise ValueError("no bone segmented at these thresholds")
@@ -252,10 +257,21 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     if region is None:
         region = _pick_bone_region(seg, arr, spacing, boneness)
 
-    z0, z1, y0, y1, x0, x1 = region.bbox_zyx
     pad = 2
-    zz0, yy0, xx0 = max(z0 - pad, 0), max(y0 - pad, 0), max(x0 - pad, 0)
-    sub = seg.labels[zz0:z1 + pad, yy0:y1 + pad, xx0:x1 + pad] == region.label
+    if whole_bone:
+        # union of ALL bone regions (never the table/pad) — the complete side.
+        bones = _bone_regions(seg, boneness) or list(seg.regions)
+        keep_labels = np.array([r.label for r in bones], dtype=seg.labels.dtype)
+        boxes = np.array([r.bbox_zyx for r in bones], dtype=np.int64)
+        z0, y0, x0 = int(boxes[:, 0].min()), int(boxes[:, 2].min()), int(boxes[:, 4].min())
+        z1, y1, x1 = int(boxes[:, 1].max()), int(boxes[:, 3].max()), int(boxes[:, 5].max())
+        zz0, yy0, xx0 = max(z0 - pad, 0), max(y0 - pad, 0), max(x0 - pad, 0)
+        crop = seg.labels[zz0:z1 + pad, yy0:y1 + pad, xx0:x1 + pad]
+        sub = np.isin(crop, keep_labels)
+    else:
+        z0, z1, y0, y1, x0, x1 = region.bbox_zyx
+        zz0, yy0, xx0 = max(z0 - pad, 0), max(y0 - pad, 0), max(x0 - pad, 0)
+        sub = seg.labels[zz0:z1 + pad, yy0:y1 + pad, xx0:x1 + pad] == region.label
 
     decimate = params.mesh_decimate_fraction or 0.3
     # "Surface quality" scales the auto remesh triangle budget (clamped so a high

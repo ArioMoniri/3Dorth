@@ -69,6 +69,7 @@ class AnalyzeReq(BaseModel):
     side: str = "left"
     region_label: int | None = None
     params: dict = {}
+    whole_bone: bool = False  # mesh EVERY bone region (the whole side), not one piece
 
 
 class CompareReq(BaseModel):
@@ -246,7 +247,7 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
     # (slow) segmentation + local-thickness. Display-only params don't change the
     # geometry, so keying on the full param dict is safe (it just caches more keys).
     key = hashlib.sha256(
-        f"{req.side}|{req.region_label}|{json.dumps(req.params, sort_keys=True)}".encode()
+        f"{req.side}|{req.region_label}|{req.whole_bone}|{json.dumps(req.params, sort_keys=True)}".encode()
     ).hexdigest()[:16]
     cache = s.setdefault("analyze_cache", OrderedDict())
     hit = cache.get(key)
@@ -258,7 +259,8 @@ def analyze(sid: str, req: AnalyzeReq) -> dict:
         with R.COMPUTE_SEMAPHORE:  # bound concurrent heavy computes (peak RAM)
             res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
                                              region_label=req.region_label,
-                                             offset_xyz=side["offset_xyz"])
+                                             offset_xyz=side["offset_xyz"],
+                                             whole_bone=req.whole_bone)
     except ValueError as e:
         raise HTTPException(422, str(e))
     clim = (params.mode_a_range_min, params.mode_a_range_max)

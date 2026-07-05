@@ -71,6 +71,8 @@ export default function ClipPanel({
   onBoxChange,
   onReset,
   canPickIsolate,
+  wholeBone,
+  onWholeBoneChange,
   visibleCount,
   totalCount,
   visiblePct,
@@ -107,10 +109,23 @@ export default function ClipPanel({
 
       {enabled && (
         <>
+          {onWholeBoneChange && (
+            <label className="clip-toggle clip-wholebone">
+              <input
+                type="checkbox"
+                checked={Boolean(wholeBone)}
+                onChange={(e) => onWholeBoneChange(e.target.checked)}
+              />
+              <span>Load whole bone (all pieces of this side)</span>
+            </label>
+          )}
           {canPickIsolate && (
             <p className="panel-hint clip-hint clip-hint-pick">
-              Tip: <strong>click the part you want</strong> on the 3D surface to
-              re-centre the box on it — then fine-tune with the sliders.
+              Tip: <strong>click a bone</strong> on the 3D surface to isolate just
+              that connected piece (everything else is hidden); trim further with
+              the sliders. <em>Reset clip</em> brings the whole bone back. Turn on
+              <strong> whole bone</strong> above to load every piece, then click the
+              one you want (e.g. the humerus).
             </p>
           )}
           <p className="panel-hint clip-hint">

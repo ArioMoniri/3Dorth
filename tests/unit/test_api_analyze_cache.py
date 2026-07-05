@@ -19,7 +19,8 @@ def test_repeat_analyze_hits_cache(monkeypatch):
                                              "offset_xyz": (0.0, 0.0, 0.0), "side": "left"}}}
     calls = {"n": 0}
 
-    def fake_analyze(a, sp, params, *, region_label=None, offset_xyz=(0, 0, 0)):
+    def fake_analyze(a, sp, params, *, region_label=None, offset_xyz=(0, 0, 0),
+                     whole_bone=False):
         calls["n"] += 1
         m = pv.Sphere(radius=3)
         m.point_data["thickness_mm"] = np.linspace(1, 5, m.n_points)

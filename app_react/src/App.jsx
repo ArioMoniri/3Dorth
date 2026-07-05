@@ -65,6 +65,9 @@ export default function App() {
 
   // Region selection (analyze returns the list of connected regions).
   const [regionLabel, setRegionLabel] = useState(null);
+  // Single-side "whole bone": mesh ALL connected pieces of the side (not just the
+  // auto-picked one), so you can see everything and click-isolate one piece.
+  const [wholeBone, setWholeBone] = useState(false);
 
   // Region thumbnails (visual picker). Fetched lazily and cached per
   // (session_id, side) so switching side / re-opening doesn't re-render.
@@ -108,6 +111,9 @@ export default function App() {
   const [meshBounds, setMeshBounds] = useState(null);
   const [clipEnabled, setClipEnabled] = useState(false);
   const [clipBox, setClipBox] = useState(null);
+  // Bumped to tell the Viewport to restore the full mesh after a component isolate
+  // (on "Reset clip" or when clipping is turned off).
+  const [isolateResetSeq, setIsolateResetSeq] = useState(0);
   const [visibleMask, setVisibleMask] = useState(null);
 
   // ---- MPR image viewer -----------------------------------------------------
@@ -199,6 +205,7 @@ export default function App() {
     setReferenceSide(sides[0] ?? null);
     setTargetSide(sides[1] ?? sides[0] ?? null);
     setRegionLabel(null);
+    setWholeBone(false);
     setNudge(ZERO_NUDGE);
     // A new scan invalidates any cached region previews.
     thumbCacheRef.current = new Map();
@@ -278,6 +285,7 @@ export default function App() {
       // re-run analyze so the map switches to that structure. Only affects
       // Mode A thickness (deviation ignores region_label).
       regionLabel,
+      wholeBone,
       params: relevant,
     });
   }, [
@@ -292,6 +300,7 @@ export default function App() {
     isMesh,
     manualTransform,
     regionLabel,
+    wholeBone,
   ]);
 
   // Is the current view a deviation view?
@@ -323,7 +332,10 @@ export default function App() {
     setComputeError(null);
     try {
       let sid = session.session_id;
-      const args = { side, params: values, regionLabel };
+      // Whole-bone: mesh every piece of the side (no single region_label).
+      const args = wholeBone
+        ? { side, params: values, wholeBone: true }
+        : { side, params: values, regionLabel };
       let res;
       try {
         res = await analyze(sid, args);
@@ -348,7 +360,7 @@ export default function App() {
       // Use the functional form and only change when it actually differs, so
       // adopting the auto-picked region does NOT spuriously bump the compute
       // signature (which now includes regionLabel) and cause a redundant run.
-      if (res.region_label != null) {
+      if (res.region_label != null && !wholeBone) {
         setRegionLabel((prev) => (prev === res.region_label ? prev : res.region_label));
       }
       setGeometryFromThickness(res);
@@ -370,7 +382,9 @@ export default function App() {
     setComputeError(null);
     try {
       let sid = session.session_id;
-      const call = (s, side_) => analyze(s, { side: side_, params: values });
+      // Whole bone per side (all connected pieces), so "Both" loads each side
+      // completely instead of just its largest component.
+      const call = (s, side_) => analyze(s, { side: side_, params: values, wholeBone: true });
       let left;
       let right;
       try {
@@ -776,10 +790,12 @@ export default function App() {
     } else if (!next) {
       setClipBox(null);
       setVisibleMask(null);
+      setIsolateResetSeq((s) => s + 1); // un-isolate: restore the full mesh
     }
   }
 
   function onResetClip() {
+    setIsolateResetSeq((s) => s + 1); // restore the full mesh (undo component isolate)
     if (!meshBounds) return;
     const [xmin, xmax, ymin, ymax, zmin, zmax] = meshBounds;
     setClipBox({ xmin, xmax, ymin, ymax, zmin, zmax });
@@ -1153,6 +1169,8 @@ export default function App() {
                 ? (d) => setPlaneNudge({ d, seq: (planeNudgeSeqRef.current += 1) })
                 : undefined
             }
+            clipIsolate={clipEnabled && !isBoth}
+            isolateResetSeq={isolateResetSeq}
           />
 
           {displayGeometry && (
@@ -1175,6 +1193,8 @@ export default function App() {
                   onBoxChange={setClipBox}
                   onReset={onResetClip}
                   canPickIsolate={!isBoth}
+                  wholeBone={wholeBone}
+                  onWholeBoneChange={!isBoth ? setWholeBone : undefined}
                   visibleCount={visibleVertexCount}
                   totalCount={totalVertexCount}
                   visiblePct={visiblePct}
