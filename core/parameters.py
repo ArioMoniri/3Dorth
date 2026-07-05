@@ -233,6 +233,14 @@ REGISTRY: list[ParamSpec] = [
              "real porosity). Display only — cortical thickness is still computed "
              "on the raw mask.",
     ),
+    ParamSpec(
+        key="mesh_supersample", label="Surface supersample", group="Meshing",
+        control=ControlType.INT, default=2, minimum=1, maximum=3, step=1,
+        help="Resample the voxel staircase away before meshing (1 = raw blocky "
+             "voxel surface; 2-3 = smooth sub-voxel surface, the step Mimics/"
+             "3-matic do — the biggest driver of a smooth render). Display only — "
+             "cortical thickness is computed on the raw mask.",
+    ),
 
     # ---- Views --------------------------------------------------------------
     ParamSpec(

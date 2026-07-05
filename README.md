@@ -428,10 +428,10 @@ expose the same knobs (a test fails the build if they ever drift apart).
 </details>
 
 <details>
-<summary><b>Full parameter list (29 knobs) and reproducibility</b></summary>
+<summary><b>Full parameter list (30 knobs) and reproducibility</b></summary>
 
 Everything configurable lives in one registry,
-[`core/parameters.py`](core/parameters.py) — all 29 parameters with ranges and
+[`core/parameters.py`](core/parameters.py) — all 30 parameters with ranges and
 units. Both UIs read that registry, and the active values are written to
 [`config.yaml`](config.yaml), so re-running from a saved `config.yaml`
 reproduces the numbers. The defaults reproduce Guo et al. 2022:

@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows
 - "Surface hole-fill" meshing control (`mesh_close_iters`): morphological closing
   before marching cubes for a smoother, less-lacy surface — display-only; cortical
   thickness is still computed on the raw mask.
+- "Surface supersample" meshing control (`mesh_supersample`, default 2): resamples
+  the voxel staircase away so marching cubes traces a smooth sub-voxel surface
+  (Mimics/3-matic-style — the biggest driver of a smooth render), plus a higher
+  default render vertex budget (90k→150k). Display-only; thickness unchanged.
 - On-image measurement tools (distance / angle) on the 2D reformats, with mm from
   the scan geometry and an "Export with measures" that burns them into the PNG.
 - Draggable + resizable overlay panels (colorbar legend, statistics, figures).

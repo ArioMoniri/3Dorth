@@ -243,7 +243,8 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
     decimate = params.mesh_decimate_fraction or 0.3
     mesh = mask_to_mesh(sub, spacing, smooth_iters=params.mesh_smooth_iters,
                         decimate_fraction=decimate,
-                        close_iters=getattr(params, "mesh_close_iters", 0))
+                        close_iters=getattr(params, "mesh_close_iters", 0),
+                        supersample=getattr(params, "mesh_supersample", 1))
     verts = np.asarray(mesh.points)
     normals = np.asarray(mesh.point_normals)
 
