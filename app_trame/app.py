@@ -73,6 +73,10 @@ _DEIDENTIFIED_DEMO = ROOT / "data" / "demo" / "shoulder_demo.nii.gz"
 _RAW_DEMO_DIR = ROOT / "Bilateral Omuz BT Jul 4 2026"
 DEMO_ZIP = _DEIDENTIFIED_DEMO if _DEIDENTIFIED_DEMO.exists() else (
     next(_RAW_DEMO_DIR.glob("*.zip"), None) if _RAW_DEMO_DIR.exists() else None)
+# Optional DE-IDENTIFIED synthetic follow-up (scripts/make_multi_demo.py). When
+# present it auto-loads as a 2nd series so Mode B's baseline-vs-follow-up
+# comparison works out of the box (parity with the API demo).
+_DEMO_FOLLOWUP = ROOT / "data" / "demo" / "shoulder_demo_followup.nii.gz"
 
 # Fallback local URLs for the UI switcher when no tunnel config is present.
 FALLBACK_TRAME_URL = "http://localhost:8081"
@@ -94,8 +98,14 @@ PLOTTER = pv.Plotter(off_screen=True)
 #              or  {mesh, side, offset_xyz}           (bare-mesh side)
 #   is_mesh: True when the session holds only a surface (no volume to measure)
 # --------------------------------------------------------------------------- #
+# A session can hold MULTIPLE uploaded SERIES (e.g. baseline + follow-up visits),
+# each possibly bilateral — mirroring the API's multi-series model so both
+# frontends behave identically. The FIRST series keeps plain side names
+# ("left"/"right"/"mesh") for backward compatibility; further series are
+# namespaced by id ("s1/left"). Mode B compares any two side keys, including two
+# series' matching sides ("left" vs "s1/left" = baseline-left vs follow-up-left).
 SESSION: dict = {"arr": None, "spacing": None, "meta": None, "sides": {},
-                 "is_mesh": False}
+                 "is_mesh": False, "series": [], "series_meta": {}, "layout": "auto"}
 _LOCK = threading.Lock()
 _LAST_MESH = {"thickness": None, "deviation": None, "thickness_second": None}
 # Region list from the last Mode-A thickness compute ([{label, volume_cm3,
@@ -139,11 +149,23 @@ def _bump_session_gen() -> int:
     return _SESSION_GEN
 
 
+def _series_entry(series_id: str, meta: dict, side_names) -> dict:
+    """One series' summary for the UI (mirrors the API's _series_entry)."""
+    return {
+        "id": series_id,
+        "name": (meta or {}).get("series") or (meta or {}).get("format") or series_id,
+        "laterality": (meta or {}).get("laterality", "unknown"),
+        "sides": list(side_names),
+    }
+
+
 def _adopt_volume_session(arr, spacing, meta, layout="auto") -> None:
     sides = pipeline.split_sides(arr, spacing, layout=layout)
     with _LOCK:
         SESSION.update(arr=arr, spacing=spacing, meta=meta, sides=sides,
-                       is_mesh=False)
+                       is_mesh=False, layout=layout,
+                       series=[_series_entry("s0", meta, sides.keys())],
+                       series_meta={"s0": meta})
     _bump_session_gen()
 
 
@@ -151,20 +173,61 @@ def _adopt_mesh_session(mesh, meta) -> None:
     sides = {"mesh": {"mesh": mesh, "side": "mesh", "offset_xyz": (0.0, 0.0, 0.0)}}
     with _LOCK:
         SESSION.update(arr=None, spacing=None, meta=meta, sides=sides,
-                       is_mesh=True)
+                       is_mesh=True, layout="auto",
+                       series=[_series_entry("s0", meta, sides.keys())],
+                       series_meta={"s0": meta})
     _bump_session_gen()
 
 
-def _load_source(path: Path, layout: str = "auto") -> None:
-    """Ingest an uploaded/demo path; branch mesh vs volume like /api/upload."""
+def _add_series(arr, spacing, meta, mesh=None) -> str:
+    """Append a new series to the CURRENT session; its sides are namespaced by id
+    ("s1/left", …). Returns the new series id. The session must already exist."""
+    # Snapshot the little we need under the lock, then do the heavy split_sides
+    # OUTSIDE the lock (mirrors _adopt_volume_session — keep the lock hold to the
+    # fast dict mutation so a concurrent compute/MPR/hover snapshot never stalls).
+    with _LOCK:
+        series_id = f"s{len(SESSION.get('series', []))}"
+        layout = SESSION.get("layout", "auto")
+    if mesh is not None:
+        new_sides = {f"{series_id}/mesh": {"mesh": mesh, "side": "mesh",
+                                           "offset_xyz": (0.0, 0.0, 0.0)}}
+    else:
+        raw = pipeline.split_sides(arr, spacing, layout=layout)
+        new_sides = {f"{series_id}/{k}": v for k, v in raw.items()}
+    with _LOCK:
+        SESSION["sides"].update(new_sides)
+        SESSION.setdefault("series_meta", {})[series_id] = meta
+        SESSION.setdefault("series", []).append(
+            _series_entry(series_id, meta, new_sides.keys()))
+        # A session with ANY volume side can do Mode-A/deviation; only a wholly
+        # mesh session stays is_mesh (so adding a volume series to a mesh-first
+        # session re-enables the volume gates).
+        SESSION["is_mesh"] = not any(
+            v.get("arr") is not None for v in SESSION["sides"].values())
+    _bump_session_gen()
+    return series_id
+
+
+def _load_source(path: Path, layout: str = "auto", add: bool = False) -> None:
+    """Ingest an uploaded/demo path; branch mesh vs volume like /api/upload.
+
+    ``add=True`` appends the file as another SERIES of the current session
+    (baseline vs follow-up …) instead of replacing it."""
     if is_mesh(path):
         mesh = pipeline.load_mesh_source(path)
         meta = {"format": path.suffix.lstrip("."), "kind": "mesh",
-                "n_points": int(mesh.n_points)}
-        _adopt_mesh_session(mesh, meta)
+                "n_points": int(mesh.n_points), "series": path.name}
+        if add and SESSION.get("sides"):
+            _add_series(None, None, meta, mesh=mesh)
+        else:
+            _adopt_mesh_session(mesh, meta)
     else:
         arr, spacing, meta = pipeline.load_volume_from_source(path, WORKDIR)
-        _adopt_volume_session(arr, spacing, meta, layout=layout)
+        meta.setdefault("series", path.name)
+        if add and SESSION.get("sides"):
+            _add_series(arr, spacing, meta)
+        else:
+            _adopt_volume_session(arr, spacing, meta, layout=layout)
 
 
 def _side_names() -> list[str]:
@@ -172,18 +235,29 @@ def _side_names() -> list[str]:
         return list(SESSION["sides"].keys())
 
 
-def _refresh_session_ui() -> None:
-    """Push session-derived UI state (side options, mesh flag, sensible defaults)."""
+def _refresh_session_ui(preserve_roles: bool = False) -> None:
+    """Push session-derived UI state (side options, mesh flag, sensible defaults).
+
+    ``preserve_roles=True`` (used by add-series) keeps the user's current
+    reference/target when they are still valid, instead of resetting to the
+    default — mirroring the React merge path, which never clobbers the chosen
+    reference when a follow-up is appended."""
     names = _side_names()
     is_mesh_sess = bool(SESSION.get("is_mesh"))
-    labels = {"left": "Left", "right": "Right", "full": "Full", "mesh": "Mesh"}
-    opts = [{"title": labels.get(n, n.capitalize()), "value": n} for n in names]
-    bilateral = set(names) == {"left", "right"}
+    series = SESSION.get("series", [])
+    # Only volume-backed sides can be a Mode-B reference/target (deviation needs a
+    # wall). A namespaced mesh side (arr is None) must never become a default role.
+    vol_sides = [k for k in names if (SESSION["sides"].get(k) or {}).get("arr") is not None]
+    opts = [{"title": _side_label(n), "value": n} for n in names]
+    # "Bilateral" here means the FIRST series has both a plain left and right (the
+    # "Both" thickness view renders those two together). A multi-series session's
+    # `names` also contains namespaced sides, so test membership, not equality.
+    s0_bilateral = ("left" in names) and ("right" in names)
     # Bilateral scans get a "Both" thickness option that renders left + right
     # together (each coloured by its own cortical thickness). UI-only side value.
     # It is offered ONLY on the thickness-side selector (side_thickness_options),
     # never on the reference/target selectors (which need a single side each).
-    both_allowed = bilateral and not is_mesh_sess
+    both_allowed = s0_bilateral and not is_mesh_sess
     thickness_opts = opts + (
         [{"title": "Both (left + right)", "value": "both"}] if both_allowed else []
     )
@@ -192,17 +266,46 @@ def _refresh_session_ui() -> None:
     state.side_thickness_options = thickness_opts
     state.session_sides = names
     state.is_mesh_session = is_mesh_sess
-    state.is_bilateral = bilateral
+    state.is_bilateral = s0_bilateral
+    # Series list (for the UI: which scan is loaded as what) + count.
+    state.series_list = [
+        {"id": s["id"], "name": s["name"],
+         "sides": ", ".join(_side_label(k).split(" · ")[-1] for k in s["sides"])}
+        for s in series
+    ]
+    state.n_series = len(series)
     # Keep the active selectors valid for the current session. 'both' is a valid
     # thickness selection on a bilateral volume session.
     valid_sides = names + (["both"] if both_allowed else [])
     if state.side not in valid_sides:
         state.side = names[0] if names else "full"
-    if bilateral:
-        state.ref_side, state.tgt_side = "left", "right"
+    # Default comparison roles, chosen among VOLUME sides only. With 2+ series the
+    # STANDARD is to compare the SAME side across series (baseline·left →
+    # follow-up·left); otherwise left vs right within a single bilateral scan, or a
+    # single-side fallback.
+    def _vol(entry):
+        return [k for k in entry["sides"] if k in vol_sides]
+
+    if len(series) >= 2 and _vol(series[0]) and _vol(series[1]):
+        ref = _vol(series[0])[0]
+        ref_bare = ref.split("/", 1)[1] if "/" in ref else ref
+        s1v = _vol(series[1])
+        tgt = next((k for k in s1v if (k.split("/", 1)[1] if "/" in k else k) == ref_bare), s1v[0])
+    elif s0_bilateral:
+        ref, tgt = "left", "right"
+    elif len(vol_sides) >= 2:
+        ref, tgt = vol_sides[0], vol_sides[1]
+    elif vol_sides:
+        ref = tgt = vol_sides[0]
     elif names:
-        # Non-bilateral: reference/target both fall back to the only side.
-        state.ref_side = state.tgt_side = names[0]
+        ref = tgt = names[0]  # mesh-only session: roles are gated in the UI
+    else:
+        ref = tgt = "full"
+    # Preserve the user's prior reference/target on add-series when still valid.
+    keep = (preserve_roles and state.ref_side in vol_sides
+            and state.tgt_side in vol_sides and state.ref_side != state.tgt_side)
+    if not keep:
+        state.ref_side, state.tgt_side = ref, tgt
     # A bare-mesh session cannot do Mode-A thickness (needs a volume wall).
     if is_mesh_sess and state.mode == "A":
         state.mode = "B"
@@ -221,7 +324,10 @@ def _refresh_session_ui() -> None:
     # A fresh scan invalidates any cached compare-mode registration.
     with _COMPARE_REG_LOCK:
         _COMPARE_REG_CACHE.clear()
-    state.compare_available = (not is_mesh_sess) and bilateral
+    # Compare needs any TWO distinct volume sides — within one bilateral scan, or
+    # the same side of two different series (cross-series baseline vs follow-up).
+    n_vol_sides = sum(1 for v in SESSION["sides"].values() if v.get("arr") is not None)
+    state.compare_available = (not is_mesh_sess) and n_vol_sides >= 2
     if state.compare_active:
         _compare_reset()
 
@@ -350,6 +456,10 @@ state.session_sides = ["left", "right"]
 state.is_mesh_session = False
 state.is_bilateral = True
 state.upload_file = None
+# Multi-series: which scans are loaded and as what. series_list = [{id,name,sides}].
+state.series_list = []
+state.n_series = 1
+state.add_series_file = None
 
 # --- Region thumbnails (visual picker) ------------------------------------ #
 # Small rendered previews per connected bone region, computed via
@@ -1777,6 +1887,9 @@ def _compute_worker(req_id: int | None = None):
                 raise RuntimeError("Reference/target side unknown.")
             if state.ref_side == state.tgt_side:
                 raise RuntimeError("Choose two different sides for deviation.")
+            if ref.get("arr") is None or tgt.get("arr") is None:
+                raise RuntimeError("Deviation needs two volume sides — a bare "
+                                   "surface mesh has no wall to compare.")
             manual = _manual_transform_matrix()
             res = pipeline.compare_sides(ref, tgt, params, manual_transform=manual)
             _LAST_MESH["deviation"] = res["mesh"]
@@ -1837,8 +1950,21 @@ def _compute_worker(req_id: int | None = None):
 
 
 def _side_label(name: str) -> str:
-    return {"left": "Left", "right": "Right", "full": "Full",
-            "mesh": "Mesh"}.get(name, name.capitalize())
+    """Human label for a side key. Later-series sides are namespaced ("s1/left");
+    when >1 series exist we prefix the series name so it's always clear WHICH scan
+    a side belongs to (e.g. "follow-up · Left")."""
+    if not name:
+        return name
+    sid = name.split("/")[0] if "/" in name else "s0"
+    bare = name.split("/", 1)[1] if "/" in name else name
+    pretty = {"left": "Left", "right": "Right", "full": "Full",
+              "mesh": "Mesh"}.get(bare, bare.capitalize())
+    series = SESSION.get("series", [])
+    if len(series) > 1:
+        entry = next((s for s in series if s["id"] == sid), None)
+        if entry:
+            return f"{entry['name']} · {pretty}"
+    return pretty
 
 
 def _computing_msg() -> str:
@@ -1951,6 +2077,17 @@ _RECOMPUTE_STATE_KEYS = [
 
 for _k in _RECOMPUTE_PARAM_KEYS + _RECOMPUTE_STATE_KEYS:
     state.change(_k)(schedule_recompute)
+
+
+@state.change("mode")
+def _on_mode_change(mode, **_k):
+    """Entering Mode B with a comparison available lands directly on the deviation
+    view (parity with React's Mode-B button), so the reference/target compare
+    workflow isn't hidden behind the Thickness sub-toggle."""
+    if mode == "B" and state.compare_available:
+        state.b_view = "deviation"
+
+
 for _k in _DISPLAY_ONLY_PARAM_KEYS:
     state.change(_k)(apply_display_only)
 
@@ -2269,6 +2406,82 @@ def _on_upload(upload_file, **_k):
     threading.Thread(target=_job, daemon=True).start()
 
 
+@state.change("add_series_file")
+def _on_add_series(add_series_file, **_k):
+    """Append an uploaded file to the CURRENT session as another series
+    (baseline vs follow-up …) instead of replacing it."""
+    if not add_series_file:
+        return
+    if not SESSION.get("sides"):
+        with state:
+            state.status = "error"
+            state.status_msg = "Load a scan first, then add a series to compare."
+        state.flush()
+        return
+    entry = add_series_file[0] if isinstance(add_series_file, list) else add_series_file
+    name = entry.get("name", "series.zip")
+    content = entry.get("content")
+    if content is None:
+        return
+    if isinstance(content, str):  # base64 fallback
+        import base64
+        content = base64.b64decode(content.split(",")[-1])
+    dest = WORKDIR / f"series_{uuid.uuid4().hex[:8]}_{name}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(bytes(content))
+
+    with state:
+        state.status = "computing"
+        state.status_msg = f"Adding series {name}…"
+    state.flush()
+
+    def _job():
+        try:
+            _load_source(dest, add=True)
+            added = SESSION.get("series", [])[-1] if SESSION.get("series") else None
+            with _LOCK:
+                added_vol = [k for k in (added["sides"] if added else [])
+                             if (SESSION["sides"].get(k) or {}).get("arr") is not None]
+            with state:
+                # Preserve the user's reference; point the TARGET at the just-added
+                # series' matching side so the default comparison is cross-series
+                # (baseline·X → follow-up·X). Mirrors React's add-series merge.
+                _refresh_session_ui(preserve_roles=True)
+                if added_vol:
+                    ref_bare = (state.ref_side.split("/", 1)[1]
+                                if "/" in (state.ref_side or "") else state.ref_side)
+                    match = next((k for k in added_vol
+                                  if (k.split("/", 1)[1] if "/" in k else k) == ref_bare),
+                                 added_vol[0])
+                    state.tgt_side = match
+                state.status_msg = (f"Series added — {state.n_series} loaded. "
+                                    "Pick reference / target below.")
+                state.status = "idle"
+                if state.mode == "B":
+                    state.b_view = "deviation"
+            state.flush()
+            recompute()
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            with state:
+                state.status = "error"
+                state.status_msg = f"Add-series ingest failed: {e}"
+            state.flush()
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
+def swap_ref_tgt(*_a, **_k):
+    """Swap the Mode-B reference and target sides — flips the deviation sign and
+    the red/green colours (parity with the React ⇄ Swap button). The ref/tgt
+    change watchers then debounce a recompute."""
+    with state:
+        state.ref_side, state.tgt_side = state.tgt_side, state.ref_side
+
+
+ctrl.swap_ref_tgt = swap_ref_tgt
+
+
 # --------------------------------------------------------------------------- #
 # UI: registry-driven control renderer.
 # --------------------------------------------------------------------------- #
@@ -2353,7 +2566,7 @@ with SinglePageWithDrawerLayout(server) as layout:
                 "Mode A is disabled. Use Mode B (comparison / viewing).",
                 v_if="is_mesh_session",
                 style="font-size:11px;color:#b26a00;margin-top:4px;line-height:1.4")
-            # Mode B: reference / target / sub-view selector
+            # Mode B: thickness / deviation sub-view toggle (Mode-B only).
             with html.Div(v_if="mode === 'B'", classes="mt-2"):
                 with v3.VBtnToggle(v_model=("b_view", "thickness"),
                                    density="compact", mandatory=True,
@@ -2362,12 +2575,35 @@ with SinglePageWithDrawerLayout(server) as layout:
                     v3.VBtn("Thickness", value="thickness",
                             disabled=("is_mesh_session",))
                     v3.VBtn("Deviation", value="deviation")
+
+            # Comparison roles — visible whenever a comparison is possible (two
+            # volume sides), assignable in Mode A OR B, mirroring React's
+            # always-visible "Comparison roles" card.
+            with html.Div(v_if="compare_available", classes="mt-2"):
+                v3.VCardSubtitle("Comparison roles (Mode B)", classes="px-0 pb-1")
                 v3.VSelect(v_model=("ref_side",), items=("side_options",),
-                           label="Reference side (on top)", density="compact",
+                           label="Reference (baseline, deviation = 0)", density="compact",
                            hide_details=True, variant="outlined", classes="mb-1")
                 v3.VSelect(v_model=("tgt_side",), items=("side_options",),
-                           label="Target side", density="compact",
-                           hide_details=True, variant="outlined")
+                           label="Target (measured against reference)", density="compact",
+                           hide_details=True, variant="outlined", classes="mb-1")
+                v3.VBtn(
+                    "Swap reference / target", size="small", block=True,
+                    variant="tonal", color="primary",
+                    prepend_icon="mdi-swap-horizontal",
+                    disabled=("ref_side === tgt_side",),
+                    click=ctrl.swap_ref_tgt)
+                html.Div(
+                    "+ = target outside reference (red) · − = inside (green). "
+                    "Swapping flips the sign and colours.",
+                    style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
+                # With 2+ series, spell out the cross-series standard.
+                html.Div(
+                    "Standard: compare the same side across series "
+                    "(baseline·Left → follow-up·Left). Labels show which scan each "
+                    "side belongs to.",
+                    v_if="n_series > 1",
+                    style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
 
             # ---- Region picker (visual thumbnails) ---------------------------
             # Only meaningful for the thickness view of a volume side. Each region
@@ -2446,6 +2682,33 @@ with SinglePageWithDrawerLayout(server) as layout:
                 accept=".zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp",
                 density="compact", hide_details=True, variant="outlined",
                 prepend_icon="mdi-upload")
+
+            # ---- Add series (baseline / follow-up …) -------------------------
+            v3.VFileInput(
+                v_model=("add_series_file", None),
+                label="＋ Add series (baseline / follow-up …)",
+                accept=".zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp",
+                density="compact", hide_details=True, variant="outlined",
+                prepend_icon="mdi-plus", classes="mt-2")
+
+            # Series list — which scan is loaded as what (shown once >1 series).
+            with html.Div(v_if="n_series > 1",
+                          classes="mt-2 pa-2",
+                          style="border:1px solid #e0e0e0;border-radius:6px;"
+                                "background:#fafbff"):
+                html.Div(
+                    "{{ n_series }} series loaded — anchored against each other:",
+                    style="font-size:11px;font-weight:600;color:#555;margin-bottom:4px")
+                with html.Div(v_for="s in series_list", key="s.id",
+                              classes="d-flex align-baseline",
+                              style="gap:6px;font-size:12px;padding:2px 0"):
+                    html.Span("{{ s.id }}",
+                              style="font-weight:700;color:#fff;background:#5b6cc4;"
+                                    "border-radius:3px;padding:1px 5px;font-size:10.5px")
+                    html.Span("{{ s.name }}",
+                              style="font-weight:600;overflow:hidden;"
+                                    "text-overflow:ellipsis;white-space:nowrap;flex:1")
+                    html.Span("{{ s.sides }}", style="color:#777;font-size:11px")
 
             v3.VDivider(classes="my-3")
 
@@ -3152,6 +3415,21 @@ def _bootstrap():
         return
     try:
         _load_source(DEMO_ZIP, layout="bilateral")
+        # Auto-load the DE-IDENTIFIED synthetic follow-up as a 2nd series so the
+        # baseline-vs-follow-up comparison works out of the box (parity with the
+        # API demo). Best-effort: any failure leaves the single-series demo intact.
+        if _DEMO_FOLLOWUP.exists():
+            try:
+                if SESSION.get("series"):
+                    SESSION["series"][0]["name"] = "baseline (demo)"
+                if SESSION.get("meta") is not None:
+                    SESSION["meta"]["series"] = "baseline (demo)"
+                arr2, spacing2, meta2 = pipeline.load_volume_from_source(
+                    _DEMO_FOLLOWUP, WORKDIR)
+                meta2["series"] = "follow-up (demo)"
+                _add_series(arr2, spacing2, meta2)
+            except Exception:  # noqa: BLE001 — keep single-series demo on failure
+                traceback.print_exc()
         with state:
             _refresh_session_ui()
             state.status_msg = "Demo scan loaded. Computing…"

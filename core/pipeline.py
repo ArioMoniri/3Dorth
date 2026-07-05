@@ -324,6 +324,10 @@ def region_thumbnails(arr, spacing, params, out_dir, prefix: str, size: int = 15
     window, heavily decimated meshes. Returns [{label, volume_cm3, boneness, thumb}]."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # A multi-series side key is namespaced ("s1/left"); the '/' must NOT leak into
+    # the output filename (it would target a non-existent subdirectory and fail the
+    # screenshot write). Flatten it to a safe, single-segment name.
+    prefix = str(prefix).replace("/", "_")
     seg = segment_bone(arr, spacing, params)
     if seg.n_regions == 0:
         return []
