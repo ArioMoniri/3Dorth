@@ -68,8 +68,11 @@ def adaptive_iso(shape, spacing, min_iso: float = 0.6,
 
 
 # Vertex budget for the DISPLAY-ONLY isotropic remesh / decimation (keeps the
-# 3-matic-equivalent reconstruction cheap on any device). Env-tunable.
-MAX_RECON_VERTS = _env_int("THREEDORTH_MAX_RECON_VERTS", 40_000)
+# 3-matic-equivalent reconstruction cheap on any device). Env-tunable. 90k keeps
+# even large structures (a whole shoulder mass) smooth, not crystallised/faceted;
+# small compact bones use their own lower natural budget. Raise "Surface quality"
+# in the UI to push higher (up to 150k).
+MAX_RECON_VERTS = _env_int("THREEDORTH_MAX_RECON_VERTS", 90_000)
 MIN_RECON_VERTS = _env_int("THREEDORTH_MIN_RECON_VERTS", 4_000)
 
 

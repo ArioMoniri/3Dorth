@@ -179,9 +179,16 @@ function buildComponentPolydata(full, mask) {
       for (let c = 0; c < comps; c += 1) ndata[j * comps + c] = sdata[i * comps + c];
       j += 1;
     }
-    sub.getPointData().addArray(vtkDataArray.newInstance({
+    const arr = vtkDataArray.newInstance({
       name: src.getName(), numberOfComponents: comps, values: ndata,
-    }));
+    });
+    // Point NORMALS must be set as the ACTIVE normals (not just added), else the
+    // mapper flat-shades the isolated piece and it looks crystallised/faceted.
+    if (comps === 3 && /normal/i.test(src.getName() || '')) {
+      sub.getPointData().setNormals(arr);
+    } else {
+      sub.getPointData().addArray(arr);
+    }
   }
   return sub;
 }

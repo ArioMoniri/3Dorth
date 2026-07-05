@@ -275,9 +275,12 @@ def analyze_thickness(arr, spacing, params, region_label=None, offset_xyz=(0.0, 
 
     decimate = params.mesh_decimate_fraction or 0.3
     # "Surface quality" scales the auto remesh triangle budget (clamped so a high
-    # setting stays bounded); higher = finer, higher-quality tissue surface.
+    # setting stays bounded); higher = finer, higher-quality tissue surface. The
+    # whole-bone view spans every piece of a side, so it gets a bigger cap to keep
+    # each piece smooth rather than faceted.
     _q = float(getattr(params, "surface_quality", 1.0) or 1.0)
-    _target_verts = int(min(max(R.reconstruct_vertex_budget(sub.shape) * _q, 2000), 150_000))
+    _maxv = 150_000 if whole_bone else R.MAX_RECON_VERTS
+    _target_verts = int(min(max(R.reconstruct_vertex_budget(sub.shape, max_verts=_maxv) * _q, 2000), 200_000))
     mesh = mask_to_mesh(sub, spacing, smooth_iters=params.mesh_smooth_iters,
                         decimate_fraction=decimate,
                         close_iters=getattr(params, "mesh_close_iters", 0),
