@@ -1771,6 +1771,12 @@ body {
 .oblique-image-box {
   flex: 1 1 auto;
   background: #000;
+  /* drag the bottom-right corner to resize the reformat; the existing
+     ResizeObserver on the box re-aligns the crosshairs after a resize. */
+  resize: both;
+  overflow: auto;
+  min-width: 160px;
+  min-height: 150px;
 }
 .oblique-empty {
   color: #6a6a78;
@@ -1799,16 +1805,25 @@ body {
   flex: 1 1 320px;
   min-height: 260px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* responsive: side-by-side when wide, stacked (each bigger) when narrow */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 6px;
   padding: 6px;
   background: #101014;
+  /* drag the bottom edge to make BOTH reference & target panels taller */
+  resize: vertical;
+  overflow: auto;
 }
 .oblique-compare-grid .compare-pane {
   min-height: 220px;
 }
 .oblique-compare-grid .oblique-image-box {
   flex: 1 1 auto;
+  /* drag a single panel's corner to resize just it */
+  resize: both;
+  overflow: auto;
+  min-width: 150px;
+  min-height: 140px;
 }
 .oblique-compare-wrap .oblique-controls {
   flex: 0 0 auto;
