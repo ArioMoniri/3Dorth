@@ -51,3 +51,4 @@ app_react/.vite/
 .idea/
 .vscode/
 .tools/
+.claude/

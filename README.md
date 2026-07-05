@@ -515,10 +515,7 @@ during compute.
 
 ## Imaging viewer, cross-sections & AR
 
-Reviewed and designed (`docs/IMAGING_DESIGN_clinical.md`,
-`docs/IMAGING_DESIGN_technical.md`), now shipped in both frontends (see
-[`GOAL_IMAGING.md`](GOAL_IMAGING.md) / [`WATCHDOG.md`](WATCHDOG.md) for the phase
-gates and how each was verified):
+Shipped in both frontends:
 
 - ✅ In-panel **image viewer** (MPR) — axial/coronal/sagittal slices beside the 3D
   map with a linked crosshair. Slices render on demand by the API, so the whole
