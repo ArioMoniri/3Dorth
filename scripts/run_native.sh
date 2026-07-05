@@ -84,7 +84,7 @@ banner
 step "System libraries (only what VTK/pyvista need; tracked for clean removal)…"
 SYS="python3-venv python3-pip git curl ca-certificates xz-utils xvfb fonts-dejavu-core \
   libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa libosmesa6 libegl1 libxrender1 libxext6 \
-  libsm6 libx11-6 libxt6 libgomp1"
+  libsm6 libx11-6 libxt6 libgomp1 libxcursor1 libxft2"
 missing=""
 for p in $SYS; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
 if [ -n "$missing" ]; then
