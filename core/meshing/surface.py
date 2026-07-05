@@ -17,16 +17,28 @@ def mask_to_mesh(
     spacing_xyz: tuple[float, float, float],
     smooth_iters: int = 20,
     decimate_fraction: float = 0.0,
+    close_iters: int = 0,
 ) -> pv.PolyData:
     """Convert a boolean mask (z, y, x) to a surface mesh in world mm.
 
     ``spacing_xyz`` is (sx, sy, sz); marching cubes needs it in array-axis order
     (z, y, x), so it is reversed internally. Output vertices are (x, y, z) mm.
+
+    ``close_iters`` > 0 morphologically closes the mask first (dilate then erode),
+    bridging small cortex gaps / partial-volume speckle so the surface is smooth
+    and continuous instead of lacy. Kept small so it fills only tiny gaps and does
+    NOT solidify the medullary cavity. This is a DISPLAY wrap — cortical thickness
+    is computed on the raw (unclosed) mask elsewhere.
     """
-    mask = np.ascontiguousarray(mask).astype(np.float32)
-    if mask.max() == 0 or min(mask.shape) < 2:
+    mask = np.ascontiguousarray(mask).astype(bool)
+    if not mask.any() or min(mask.shape) < 2:
         return pv.PolyData()
 
+    if close_iters and int(close_iters) > 0:
+        from scipy import ndimage
+        mask = ndimage.binary_closing(mask, iterations=int(close_iters))
+
+    mask = mask.astype(np.float32)
     sx, sy, sz = spacing_xyz
     verts_zyx, faces, _normals, _vals = measure.marching_cubes(
         mask, level=0.5, spacing=(sz, sy, sx)

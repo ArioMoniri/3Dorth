@@ -222,6 +222,15 @@ REGISTRY: list[ParamSpec] = [
         control=ControlType.FLOAT, default=0.0, minimum=0.0, maximum=0.95, step=0.05,
         help="Fraction of triangles to remove. 0 = no decimation.",
     ),
+    ParamSpec(
+        key="mesh_close_iters", label="Surface hole-fill", group="Meshing",
+        control=ControlType.INT, default=1, minimum=0, maximum=4, step=1,
+        help="Morphological closing on the bone mask before meshing — bridges "
+             "small cortex gaps / partial-volume speckle for a smoother, less "
+             "lacy surface (0 = raw/honest; higher = smoother, but can bridge "
+             "real porosity). Display only — cortical thickness is still computed "
+             "on the raw mask.",
+    ),
 
     # ---- Views --------------------------------------------------------------
     ParamSpec(
