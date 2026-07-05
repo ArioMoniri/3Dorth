@@ -83,7 +83,8 @@ banner
 # ---- 1. system libs (only the unavoidable GL/Xvfb; only-missing; tracked) --
 step "System libraries (only what VTK/pyvista need; tracked for clean removal)…"
 SYS="python3-venv python3-pip git curl ca-certificates xz-utils xvfb fonts-dejavu-core \
-  libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa libxrender1 libxext6 libsm6 libx11-6 libxt6 libgomp1"
+  libgl1 libglx-mesa0 libgl1-mesa-dri libglu1-mesa libosmesa6 libegl1 libxrender1 libxext6 \
+  libsm6 libx11-6 libxt6 libgomp1"
 missing=""
 for p in $SYS; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
 if [ -n "$missing" ]; then
@@ -189,8 +190,15 @@ step "Starting the app (API + UI) on ${BIND}:${APP_PORT} — crash-resilient (au
 # fetch"). $0 is tagged "3dorth-api-supervisor" so _kill_running can stop the LOOP first
 # (otherwise it would just respawn uvicorn on --down/--restart). Logs + restarts → api.log.
 UVICORN="$(pwd)/.venv/bin/uvicorn"
-nohup bash -c '
+# The API's render paths (region previews, PNG/AR export via VTK/pyvista) need a GL
+# context. Without one the pod has "bad X server connection / no EGL / no OSMesa" and VTK
+# SEGFAULTS, killing uvicorn (→ dead :8000 → ssh -L refused → "Failed to fetch"). So run
+# the whole supervisor under a virtual X display, exactly like trame. Force offscreen +
+# software GL so it works even where hardware GL is absent.
+XVFB=""; command -v xvfb-run >/dev/null 2>&1 && XVFB="xvfb-run -a"
+nohup $XVFB bash -c '
   uv="$1"; host="$2"; port="$3"; sd="$4"
+  export PYVISTA_OFF_SCREEN=true LIBGL_ALWAYS_SOFTWARE=1   # headless software GL (llvmpipe)
   while :; do
     THREEDORTH_STATIC_DIR="$sd" "$uv" api.main:app --host "$host" --port "$port"
     echo "$(date "+%F %T") [supervisor] API exited ($?) — restarting in 2s"
