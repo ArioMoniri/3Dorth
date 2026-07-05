@@ -61,9 +61,29 @@ def _resolve_static_dir() -> Path | None:
     return candidate if (candidate / "index.html").is_file() else None
 
 
+class _SpaStatic(StaticFiles):
+    """Serve the built SPA with correct caching so a redeploy is picked up WITHOUT
+    a manual hard-refresh: ``index.html`` must always be revalidated (else the
+    browser keeps an old copy that points at stale hashed bundles — the classic
+    "my changes don't show" trap), while the content-hashed ``assets/*`` are
+    immutable and cache forever."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        try:
+            p = str(path)
+            if p in ("", ".", "/", "index.html") or p.endswith(".html"):
+                resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+            elif "assets/" in p:
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        except Exception:
+            pass
+        return resp
+
+
 _STATIC_DIR = _resolve_static_dir()
 if _STATIC_DIR is not None:
-    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="ui")
+    app.mount("/", _SpaStatic(directory=str(_STATIC_DIR), html=True), name="ui")
     print(f"[3Dorth] serving the React UI at / from {_STATIC_DIR}", flush=True)
 else:
     print("[3Dorth] React UI NOT served at / — no build found at app_react/dist "
