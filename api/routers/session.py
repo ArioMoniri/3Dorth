@@ -181,7 +181,7 @@ async def upload(file: UploadFile = File(...)) -> dict:
 # smooth and the download over a tunnel is small. Stats are computed on the FULL mesh
 # (before this), so accuracy is unaffected — only the rendered surface is lighter.
 # Env-tunable; per-request override via the analyze/compare `render_max_verts` param.
-_RENDER_MAX_VERTS = int(os.getenv("THREEDORTH_RENDER_MAX_VERTS", "180000"))
+_RENDER_MAX_VERTS = int(os.getenv("THREEDORTH_RENDER_MAX_VERTS", "90000"))
 
 
 def _save_mesh(mesh, key: str, max_verts: int | None = None) -> str:
