@@ -309,6 +309,7 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
     # A bare-mesh session cannot do Mode-A thickness (needs a volume wall).
     if is_mesh_sess and state.mode == "A":
         state.mode = "B"
+    _update_dev_labels()  # series-aware deviation legend labels
     state.meta_html = _meta_html()
     # A fresh scan invalidates any previously shown region previews.
     state.region_thumbs = []
@@ -460,6 +461,15 @@ state.upload_file = None
 state.series_list = []
 state.n_series = 1
 state.add_series_file = None
+# Deviation legend explanation: series-aware role labels + colormap-matched
+# swatch colours, so the diverging map's meaning (gained vs lost bone) is spelt out.
+state.dev_ref_label = "Left"
+state.dev_tgt_label = "Right"
+state.dev_pos_color = "#b2182b"
+state.dev_neg_color = "#2166ac"
+_SW = "display:inline-block;width:14px;height:14px;border-radius:3px;flex:none;"
+state.dev_pos_swatch = _SW + "background:#b2182b"
+state.dev_neg_swatch = _SW + "background:#2166ac"
 
 # --- Region thumbnails (visual picker) ------------------------------------ #
 # Small rendered previews per connected bone region, computed via
@@ -1967,6 +1977,32 @@ def _side_label(name: str) -> str:
     return pretty
 
 
+def _update_dev_labels(*_a, **_k):
+    """Refresh the deviation legend's series-aware role labels + colormap-matched
+    swatch colours (the plain-language "gained vs lost bone" key)."""
+    state.dev_ref_label = _side_label(state.ref_side)
+    state.dev_tgt_label = _side_label(state.tgt_side)
+    neg, pos = "#2166ac", "#b2182b"
+    try:
+        from core.viz.colormap import discrete_colors
+        cols = discrete_colors(state.mode_b_colormap, 3)  # low, mid, high RGBA
+        def _hex(c):
+            return "#%02x%02x%02x" % (int(c[0] * 255), int(c[1] * 255), int(c[2] * 255))
+        neg, pos = _hex(cols[0]), _hex(cols[2])
+    except Exception:  # noqa: BLE001
+        pass
+    # Precompute the FULL swatch CSS (robust static style binding, no JS interp).
+    _sw = "display:inline-block;width:14px;height:14px;border-radius:3px;flex:none;"
+    state.dev_pos_color = pos
+    state.dev_neg_color = neg
+    state.dev_pos_swatch = _sw + f"background:{pos}"
+    state.dev_neg_swatch = _sw + f"background:{neg}"
+
+
+for _k in ("ref_side", "tgt_side", "mode_b_colormap"):
+    state.change(_k)(_update_dev_labels)
+
+
 def _computing_msg() -> str:
     return ("Computing… (Mode B deviation involves registration and can take a "
             "while)" if (state.mode == "B" and state.b_view == "deviation")
@@ -2594,7 +2630,8 @@ with SinglePageWithDrawerLayout(server) as layout:
                     disabled=("ref_side === tgt_side",),
                     click=ctrl.swap_ref_tgt)
                 html.Div(
-                    "+ = target outside reference (red) · − = inside (green). "
+                    "Deviation = the DIFFERENCE between the two surfaces: "
+                    "+ target outside reference (bone gained) · − inside (lost). "
                     "Swapping flips the sign and colours.",
                     style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
                 # With 2+ series, spell out the cross-series standard.
@@ -2604,6 +2641,31 @@ with SinglePageWithDrawerLayout(server) as layout:
                     "side belongs to.",
                     v_if="n_series > 1",
                     style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
+
+            # ---- Deviation legend key: what the colours MEAN -----------------
+            # Shown in the deviation view — the DIFFERENCE between the two anchored
+            # surfaces (mm), not a thickness map.
+            with html.Div(
+                v_if="mode === 'B' && b_view === 'deviation' && compare_available",
+                classes="mt-2 pa-2",
+                style="border:1px solid #e0e0e0;border-radius:6px;background:#fafbff"):
+                html.Div(
+                    "How {{ dev_tgt_label }} differs from {{ dev_ref_label }} (mm):",
+                    style="font-size:11px;font-weight:600;color:#555;margin-bottom:5px")
+                with html.Div(classes="d-flex align-center",
+                              style="gap:6px;font-size:11px;margin-bottom:3px;line-height:1.35"):
+                    html.Span(style=("dev_pos_swatch",))
+                    html.Span("+ outside reference: bone gained / grew")
+                with html.Div(classes="d-flex align-center",
+                              style="gap:6px;font-size:11px;margin-bottom:3px;line-height:1.35"):
+                    html.Span(style="display:inline-block;width:14px;height:14px;"
+                                    "border-radius:3px;flex:none;background:#f7f7f7;"
+                                    "border:1px solid #ccc")
+                    html.Span("0: surfaces coincide — no change")
+                with html.Div(classes="d-flex align-center",
+                              style="gap:6px;font-size:11px;line-height:1.35"):
+                    html.Span(style=("dev_neg_swatch",))
+                    html.Span("− inside reference: bone lost / resorbed")
 
             # ---- Region picker (visual thumbnails) ---------------------------
             # Only meaningful for the thickness view of a volume side. Each region

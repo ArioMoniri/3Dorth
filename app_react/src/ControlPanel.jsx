@@ -215,8 +215,9 @@ export default function ControlPanel({
             <p className="panel-hint roles-hint">
               Mode B measures the <b title="the surface being assessed">target</b> against
               the <b title="the baseline surface, deviation = 0 mm on it">reference</b>{' '}
-              baseline: <b>+ = target outside reference (red)</b>,{' '}
-              <b>− = inside (green)</b>. Swapping the two flips the sign and colours.
+              baseline — the coloured map is the <b>difference between the two surfaces</b>:{' '}
+              <b>+ = target outside reference</b> (bone gained),{' '}
+              <b>− = inside</b> (bone lost). Swapping the two flips the sign and colours.
             </p>
             <label className="ctl ctl-enum">
               <span className="ctl-label">Reference (baseline)</span>
@@ -245,7 +246,7 @@ export default function ControlPanel({
               className="swap-sides-btn"
               onClick={onSwapSides}
               disabled={!referenceSide || referenceSide === targetSide}
-              title="Swap reference and target — flips the deviation sign and the red/green colours"
+              title="Swap reference and target — flips the deviation sign and the colours"
             >
               ⇄ Swap reference / target
             </button>
@@ -309,16 +310,24 @@ export default function ControlPanel({
               <button
                 className={modeBView === 'thickness' ? 'active' : ''}
                 onClick={() => onModeBViewChange('thickness')}
+                title="Colour each scan by its OWN cortical thickness (not a comparison)"
               >
-                Per-side thickness
+                Each scan's thickness
               </button>
               <button
                 className={modeBView === 'deviation' ? 'active' : ''}
                 onClick={() => onModeBViewChange('deviation')}
+                title="Colour by the DIFFERENCE between the two anchored surfaces (mm) — this is the comparison"
               >
-                Deviation
+                Difference between scans
               </button>
             </div>
+            <p className="panel-hint" style={{ marginTop: '4px' }}>
+              <strong>Difference between scans</strong> is the comparison: red/blue = how far
+              the target surface sits outside/inside the reference (mm).{' '}
+              <strong>Each scan's thickness</strong> just colours one bone by its own wall
+              thickness — not a comparison.
+            </p>
           </>
         )}
 

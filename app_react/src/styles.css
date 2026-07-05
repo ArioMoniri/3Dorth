@@ -1991,6 +1991,31 @@ body {
 .center-view-btn:not(:disabled):hover { background: #eef0fa; border-color: var(--accent-2); }
 
 /* Reference/target readout + swap, right on the deviation legend (point of use) */
+/* Deviation legend plain-language key: what the diverging colours mean. */
+.dev-key {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text, #222);
+  max-width: 260px;
+}
+.dev-key-head { margin-bottom: 5px; color: var(--text-muted); }
+.dev-key-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.dev-sw {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  margin-top: 1px;
+}
+
 .legend-swap-row {
   display: flex;
   align-items: center;

@@ -125,12 +125,12 @@ def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
     plotter.add_mesh(
         mesh,
         scalars=dev_scalar,
-        cmap=get_cmap("blue_white_red"),
+        cmap=get_cmap(params.mode_b_colormap),
         n_colors=params.mode_b_colorbar_steps,
         clim=[center - span, center + span],
         smooth_shading=True,
         scalar_bar_args=dict(
-            title="Signed deviation (mm)", vertical=True,
+            title="Surface difference (mm): +out / -in", vertical=True,
             position_x=0.82, position_y=0.10, height=0.78, width=0.05,
             n_labels=min(params.mode_b_colorbar_steps, 11), fmt="%+.2f",
             title_font_size=16, label_font_size=13, color="black",

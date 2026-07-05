@@ -14,13 +14,23 @@ const COLORMAP_HEX = {
   magma: ['#000004', '#51127c', '#b63679', '#fb8861', '#fcfdbf'],
   turbo: ['#30123b', '#28bceb', '#a2fc3c', '#fb8022', '#7a0403'],
   cividis: ['#00204d', '#414d6b', '#7c7b78', '#bcaf6f', '#ffea46'],
-  // diverging (Mode B)
+  // diverging (Mode B): low (negative = target INSIDE reference = bone lost)
+  // -> white (0 = no change) -> high (positive = OUTSIDE = bone gained)
   blue_white_red: ['#2166ac', '#f7f7f7', '#b2182b'],
+  green_white_red: ['#1a9850', '#f7f7f7', '#d73027'],
   coolwarm: ['#3b4cc0', '#dddddd', '#b40426'],
   RdBu_r: ['#053061', '#f7f7f7', '#67001f'],
   seismic: ['#00004c', '#ffffff', '#7f0000'],
   bwr: ['#0000ff', '#ffffff', '#ff0000'],
 };
+
+// The low / mid / high anchor colours (as CSS hex) of a colormap — used to draw
+// the deviation legend's plain-language explanation so the swatches always match
+// whatever diverging map is active.
+export function colormapEndpoints(colormap) {
+  const hex = COLORMAP_HEX[colormap] || COLORMAP_HEX.blue_white_red;
+  return { low: hex[0], mid: hex[Math.floor(hex.length / 2)], high: hex[hex.length - 1] };
+}
 
 function anchorsFor(colormap) {
   const hex = COLORMAP_HEX[colormap] || COLORMAP_HEX.green_yellow_red;

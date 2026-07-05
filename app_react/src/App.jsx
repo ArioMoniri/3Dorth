@@ -43,6 +43,7 @@ import HoverTooltip from './HoverTooltip';
 import ClipPanel from './ClipPanel';
 import { buildManualTransform } from './ManualAnchor';
 import { computeMaskedStats } from './clipStats';
+import { colormapEndpoints } from './colors';
 
 const ZERO_NUDGE = { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 };
 const DEFAULT_CAMERA = { azimuth: 0, elevation: 0, roll: 0, zoom: 1 };
@@ -1309,37 +1310,58 @@ export default function App() {
                 />
               </DraggablePanel>
             )}
-            {showDeviationLegend && (
-              <DraggablePanel className="dp-legend">
-                <Legend
-                  diverging
-                  rangeMin={displayGeometry.rangeMin}
-                  rangeMax={displayGeometry.rangeMax}
-                  steps={displayGeometry.steps}
-                  reverse={displayGeometry.reverse}
-                  colormap={displayGeometry.colormap}
-                  title={`Signed deviation (mm) — ${cap(targetSide)} vs ${cap(
-                    referenceSide,
-                  )}`}
-                />
-                <div className="legend-swap-row">
-                  <span className="legend-swap-info">
-                    <strong>Target</strong> {cap(targetSide)} · <strong>Reference</strong>{' '}
-                    {cap(referenceSide)}
-                    {session?.meta?.series ? ` · ${session.meta.series}` : ''}
-                  </span>
-                  <button
-                    type="button"
-                    className="legend-swap-btn"
-                    onClick={swapSides}
-                    disabled={referenceSide === targetSide}
-                    title="Swap reference / target — inverts the red/green (sign) and recomputes"
-                  >
-                    ⇄ Swap
-                  </button>
-                </div>
-              </DraggablePanel>
-            )}
+            {showDeviationLegend && (() => {
+              const tgtL = sideLabelOf(targetSide, session?.series);
+              const refL = sideLabelOf(referenceSide, session?.series);
+              const ep = colormapEndpoints(displayGeometry.colormap);
+              return (
+                <DraggablePanel className="dp-legend">
+                  <Legend
+                    diverging
+                    rangeMin={displayGeometry.rangeMin}
+                    rangeMax={displayGeometry.rangeMax}
+                    steps={displayGeometry.steps}
+                    reverse={displayGeometry.reverse}
+                    colormap={displayGeometry.colormap}
+                    title="Surface difference (mm)"
+                  />
+                  {/* Plain-language key: what the colours MEAN for these two scans.
+                      This is the DIFFERENCE between the two anchored surfaces at
+                      each point — not a thickness map. */}
+                  <div className="dev-key">
+                    <div className="dev-key-head">
+                      How <strong>{tgtL}</strong> differs from <strong>{refL}</strong>:
+                    </div>
+                    <div className="dev-key-row">
+                      <span className="dev-sw" style={{ background: ep.high }} />
+                      <span><strong>+ (positive)</strong> — {tgtL} sits <strong>outside</strong> {refL}: bone <strong>gained / grew</strong> here</span>
+                    </div>
+                    <div className="dev-key-row">
+                      <span className="dev-sw" style={{ background: ep.mid, border: '1px solid #ccc' }} />
+                      <span><strong>0</strong> — surfaces coincide: <strong>no change</strong></span>
+                    </div>
+                    <div className="dev-key-row">
+                      <span className="dev-sw" style={{ background: ep.low }} />
+                      <span><strong>− (negative)</strong> — {tgtL} sits <strong>inside</strong> {refL}: bone <strong>lost / resorbed</strong> here</span>
+                    </div>
+                  </div>
+                  <div className="legend-swap-row">
+                    <span className="legend-swap-info">
+                      <strong>Target</strong> {tgtL} · <strong>Reference</strong> {refL}
+                    </span>
+                    <button
+                      type="button"
+                      className="legend-swap-btn"
+                      onClick={swapSides}
+                      disabled={referenceSide === targetSide}
+                      title="Swap reference / target — inverts the sign (and the colours) and recomputes"
+                    >
+                      ⇄ Swap
+                    </button>
+                  </div>
+                </DraggablePanel>
+              );
+            })()}
             <DraggablePanel className="dp-stats">
               {isDeviationView ? (
                 <StatsPanel

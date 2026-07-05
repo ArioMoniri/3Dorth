@@ -61,7 +61,7 @@ class ParamSpec(BaseModel):
 
 THICKNESS_ALGORITHMS = ["local_thickness", "ray_cast"]
 MODE_A_COLORMAPS = ["green_yellow_red", "viridis", "plasma", "inferno", "magma", "turbo", "cividis"]
-MODE_B_COLORMAPS = ["blue_white_red", "coolwarm", "RdBu_r", "seismic", "bwr"]
+MODE_B_COLORMAPS = ["blue_white_red", "green_white_red", "coolwarm", "RdBu_r", "seismic", "bwr"]
 AXES = ["x", "y", "z"]
 SIGN_CONVENTIONS = ["target_outside_positive", "target_outside_negative"]
 STANDARD_VIEWS = ["anterior", "posterior", "lateral", "medial", "superior", "inferior"]

@@ -22,10 +22,16 @@ _GREEN_YELLOW_RED = LinearSegmentedColormap.from_list(
 _BLUE_WHITE_RED = LinearSegmentedColormap.from_list(
     "blue_white_red", ["#2166ac", "#f7f7f7", "#b2182b"],  # diverging
 )
+# Red/green diverging alternative (green = bone lost, red = bone gained). Kept as
+# an option; blue-white-red stays the default (colour-blind safer).
+_GREEN_WHITE_RED = LinearSegmentedColormap.from_list(
+    "green_white_red", ["#1a9850", "#f7f7f7", "#d73027"],
+)
 
 _CUSTOM = {
     "green_yellow_red": _GREEN_YELLOW_RED,
     "blue_white_red": _BLUE_WHITE_RED,
+    "green_white_red": _GREEN_WHITE_RED,
 }
 
 
