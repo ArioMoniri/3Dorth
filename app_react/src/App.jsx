@@ -37,6 +37,7 @@ import ArModal from './ArModal';
 import Legend from './Legend';
 import StatsPanel from './StatsPanel';
 import StatsFigures from './StatsFigures';
+import DraggablePanel from './DraggablePanel';
 import ShareSwitch from './ShareSwitch';
 import HoverTooltip from './HoverTooltip';
 import ClipPanel from './ClipPanel';
@@ -1026,54 +1027,61 @@ export default function App() {
 
           <div className="right-overlay">
             {showThicknessLegend && (
-              <Legend
-                rangeMin={displayGeometry.rangeMin}
-                rangeMax={displayGeometry.rangeMax}
-                steps={displayGeometry.steps}
-                reverse={displayGeometry.reverse}
-                colormap={displayGeometry.colormap}
-                title={`Cortical thickness (mm) — ${cap(side)}`}
-              />
+              <DraggablePanel className="dp-legend">
+                <Legend
+                  rangeMin={displayGeometry.rangeMin}
+                  rangeMax={displayGeometry.rangeMax}
+                  steps={displayGeometry.steps}
+                  reverse={displayGeometry.reverse}
+                  colormap={displayGeometry.colormap}
+                  title={`Cortical thickness (mm) — ${cap(side)}`}
+                />
+              </DraggablePanel>
             )}
             {showDeviationLegend && (
-              <Legend
-                diverging
-                rangeMin={displayGeometry.rangeMin}
-                rangeMax={displayGeometry.rangeMax}
-                steps={displayGeometry.steps}
-                reverse={displayGeometry.reverse}
-                colormap={displayGeometry.colormap}
-                title={`Signed deviation (mm) — ${cap(targetSide)} vs ${cap(
-                  referenceSide,
-                )}`}
-              />
+              <DraggablePanel className="dp-legend">
+                <Legend
+                  diverging
+                  rangeMin={displayGeometry.rangeMin}
+                  rangeMax={displayGeometry.rangeMax}
+                  steps={displayGeometry.steps}
+                  reverse={displayGeometry.reverse}
+                  colormap={displayGeometry.colormap}
+                  title={`Signed deviation (mm) — ${cap(targetSide)} vs ${cap(
+                    referenceSide,
+                  )}`}
+                />
+              </DraggablePanel>
             )}
-            {isDeviationView ? (
-              <StatsPanel
-                kind="deviation"
-                result={deviationResult}
-                scalarValues={scalarValues}
-                unit="mm"
-                clipStats={clipStats}
-                visibleMask={visibleMask}
-                visibleCount={visibleVertexCount}
-                totalCount={totalVertexCount}
-                visiblePct={visiblePct}
-              />
-            ) : (
-              <StatsPanel
-                kind="thickness"
-                result={thicknessResult}
-                scalarValues={scalarValues}
-                unit="mm"
-                clipStats={clipStats}
-                visibleMask={visibleMask}
-                visibleCount={visibleVertexCount}
-                totalCount={totalVertexCount}
-                visiblePct={visiblePct}
-              />
-            )}
+            <DraggablePanel className="dp-stats">
+              {isDeviationView ? (
+                <StatsPanel
+                  kind="deviation"
+                  result={deviationResult}
+                  scalarValues={scalarValues}
+                  unit="mm"
+                  clipStats={clipStats}
+                  visibleMask={visibleMask}
+                  visibleCount={visibleVertexCount}
+                  totalCount={totalVertexCount}
+                  visiblePct={visiblePct}
+                />
+              ) : (
+                <StatsPanel
+                  kind="thickness"
+                  result={thicknessResult}
+                  scalarValues={scalarValues}
+                  unit="mm"
+                  clipStats={clipStats}
+                  visibleMask={visibleMask}
+                  visibleCount={visibleVertexCount}
+                  totalCount={totalVertexCount}
+                  visiblePct={visiblePct}
+                />
+              )}
+            </DraggablePanel>
             {displayGeometry && (
+              <DraggablePanel className="dp-figures">
               <StatsFigures
                 sessionId={session.session_id}
                 mode={isDeviationView ? 'B' : 'A'}
@@ -1088,6 +1096,7 @@ export default function App() {
                 computeSignature={computeSignature}
                 hasResult={Boolean(activeResult)}
               />
+              </DraggablePanel>
             )}
           </div>
         </div>

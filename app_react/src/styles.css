@@ -2349,3 +2349,31 @@ body {
   background: #28e0c8;
   color: #06221e;
 }
+
+/* ---- draggable + resizable overlay panels (legend / stats / figures) -------- */
+.draggable-panel {
+  position: relative;
+  resize: both;
+  overflow: auto;
+  min-width: 130px;
+  max-width: 96vw;
+}
+.draggable-panel > .drag-handle {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  z-index: 4;
+  cursor: move;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-muted);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.55);
+  user-select: none;
+  touch-action: none;
+}
+.draggable-panel > .drag-handle:hover {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--accent-2);
+}
