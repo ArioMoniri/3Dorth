@@ -340,9 +340,9 @@ export default function ControlPanel({
           <button
             className="reset-btn"
             onClick={onReset}
-            title="Restore paper defaults"
+            title="Restore defaults"
           >
-            Reset to paper defaults
+            Reset to defaults
           </button>
         </div>
         <p className="panel-hint">

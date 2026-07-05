@@ -311,6 +311,62 @@ export function obliqueCompare(
   return postJSON(`/api/session/${sessionId}/oblique-compare`, body);
 }
 
+// ---- statistics figures (publication-style PNG/TIFF/JPG) ------------------
+// POST /api/session/{sid}/figures
+//   body: { mode:'A'|'B', side|reference_side/target_side, region_label?,
+//           params?, which?:['histogram','by_region'], manual_transform? }
+//   -> { figures: { histogram?: base64 png, by_region?: base64 png }, note }
+// Reuses the SAME analyze/compare cache the interactive viewer already
+// populated, so this never re-runs segmentation/thickness/registration just
+// to draw a figure. `note` states the single-subject/descriptive scope and,
+// when `by_region` was requested but the data doesn't support it (<2 regions,
+// or Mode B), explains why it was omitted — never fabricate groups.
+export function fetchFigures(
+  sessionId,
+  { mode, side, referenceSide, targetSide, regionLabel, params, which, manualTransform },
+) {
+  const body = { mode, params: params || {} };
+  if (side != null) body.side = side;
+  if (referenceSide != null) body.reference_side = referenceSide;
+  if (targetSide != null) body.target_side = targetSide;
+  if (regionLabel != null) body.region_label = regionLabel;
+  if (which !== undefined) body.which = which;
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/figures`, body);
+}
+
+// POST /api/session/{sid}/export-figures -> same body as fetchFigures plus
+// { formats:['png','tiff','jpg'], dpi }.
+//   -> { files: { histogram|histogram_<fmt>|by_region|by_region_<fmt>: url },
+//        mode, scalar, note }
+// Each requested figure is written in EVERY requested format (2 figures x 2
+// formats = 4 files). When exactly one format is requested the keys are bare
+// (`histogram`); with >1 format they are suffixed (`histogram_png`).
+export function exportFigures(
+  sessionId,
+  {
+    mode,
+    side,
+    referenceSide,
+    targetSide,
+    regionLabel,
+    params,
+    which,
+    manualTransform,
+    formats,
+    dpi,
+  },
+) {
+  const body = { mode, params: params || {}, formats, dpi };
+  if (side != null) body.side = side;
+  if (referenceSide != null) body.reference_side = referenceSide;
+  if (targetSide != null) body.target_side = targetSide;
+  if (regionLabel != null) body.region_label = regionLabel;
+  if (which !== undefined) body.which = which;
+  if (manualTransform !== undefined) body.manual_transform = manualTransform;
+  return postJSON(`/api/session/${sessionId}/export-figures`, body);
+}
+
 // GET /api/session/{sid}/model.glb -> binary glTF URL of the most-recently-
 // computed surface (thickness or deviation), per-vertex colour baked in. 409
 // if nothing has been computed yet. Returned as a plain URL string (like

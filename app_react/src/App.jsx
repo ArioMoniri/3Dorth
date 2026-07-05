@@ -36,6 +36,7 @@ import ObliqueView from './ObliqueView';
 import ArModal from './ArModal';
 import Legend from './Legend';
 import StatsPanel from './StatsPanel';
+import StatsFigures from './StatsFigures';
 import ShareSwitch from './ShareSwitch';
 import HoverTooltip from './HoverTooltip';
 import ClipPanel from './ClipPanel';
@@ -1070,6 +1071,22 @@ export default function App() {
                 visibleCount={visibleVertexCount}
                 totalCount={totalVertexCount}
                 visiblePct={visiblePct}
+              />
+            )}
+            {displayGeometry && (
+              <StatsFigures
+                sessionId={session.session_id}
+                mode={isDeviationView ? 'B' : 'A'}
+                side={side}
+                referenceSide={isDeviationView ? referenceSide : undefined}
+                targetSide={isDeviationView ? targetSide : undefined}
+                regionLabel={!isDeviationView ? regionLabel : undefined}
+                params={
+                  isDeviationView ? { ...values, mirror_sagittal: mirror } : values
+                }
+                manualTransform={isDeviationView ? manualTransform : undefined}
+                computeSignature={computeSignature}
+                hasResult={Boolean(activeResult)}
               />
             )}
           </div>

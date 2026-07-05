@@ -58,6 +58,7 @@ from app_trame.scene import build_deviation_scene, build_thickness_scene  # noqa
 from core import pipeline  # noqa: E402
 from core.export import export_bundle  # noqa: E402
 from core.ingest import is_mesh  # noqa: E402
+from core.stats.figures import render_result_figures  # noqa: E402
 
 pv.OFF_SCREEN = True
 
@@ -97,6 +98,12 @@ SESSION: dict = {"arr": None, "spacing": None, "meta": None, "sides": {},
                  "is_mesh": False}
 _LOCK = threading.Lock()
 _LAST_MESH = {"thickness": None, "deviation": None}
+# Region list from the last Mode-A thickness compute ([{label, volume_cm3,
+# boneness}], see core.pipeline.analyze_thickness) — feeds the per-region
+# statistics figure. Mode B has no per-region breakdown (single registered
+# surface), so this is left as-is (stale/previous Mode A regions) when in
+# Mode B; the figures panel only reads it in the Mode A branch below.
+_LAST_REGIONS: list[dict] | None = None
 
 # Monotonic session generation: bumped whenever a new scan/mesh is adopted, so a
 # thumbnail cache keyed by (generation, side) is invalidated automatically.
@@ -357,6 +364,20 @@ state.hover_y = 0
 # --- Histogram (distribution of the active scalar) ------------------------ #
 state.histogram_img = ""          # data:image/png;base64,... matplotlib histogram
 state.histogram_bins = {"counts": [], "edges": [], "n": 0}
+
+# --- Statistics & Figures (publication-style, mirrors core.stats.figures) - #
+# Rendered from the SAME last-computed mesh as the histogram above (display-
+# only, never re-runs the pipeline) via core.stats.figures.render_result_figures
+# — the exact functions the API's /session/{sid}/figures endpoint uses, so the
+# trame and React UIs stay byte-for-byte identical for a given scalar array.
+state.stats_figures = {}          # {name: data:image/png;base64,...}
+state.stats_figures_note = ""     # honesty-rail caption (single-subject/descriptive)
+state.figures_export_formats = ["png"]
+state.figures_export_format_choices = ["png", "tiff", "jpg"]
+state.figures_export_dpi = 300
+state.figures_export_busy = False
+state.figures_export_msg = ""
+state.figures_export_links = []   # [{name, fmt, url}]
 
 # --- Clip + visible-part stats (display-only) ------------------------------ #
 # Isolates a sub-part of the CURRENTLY DISPLAYED surface with an axis-aligned
@@ -1330,6 +1351,124 @@ ctrl.refresh_histogram_and_clip = refresh_histogram_and_clip
 
 
 # --------------------------------------------------------------------------- #
+# Statistics & Figures panel (publication-style PNG figures).
+#
+# DISPLAY-ONLY, same contract as the histogram above: reads the CURRENTLY
+# COMPUTED mesh's own scalar array (``_LAST_MESH`` / ``_LAST_REGIONS``) and
+# renders through ``core.stats.figures.render_result_figures`` — the exact
+# module the API's POST /session/{sid}/figures uses — so a trame render and an
+# API render of the same scalar array are byte-identical at a given DPI.
+# Never re-runs core.pipeline. Mode B (deviation) has one registered surface,
+# so "by_region" is naturally omitted there (regions=None below).
+# --------------------------------------------------------------------------- #
+def refresh_stats_figures(*_a, **_k) -> None:
+    mesh, key, _label = _active_scalar_mesh()
+    if mesh is None or key not in mesh.point_data:
+        with state:
+            state.stats_figures = {}
+            state.stats_figures_note = ""
+        state.flush()
+        return
+
+    values = np.asarray(mesh.point_data[key], dtype=np.float64)
+    diverging = state.mode == "B" and state.b_view == "deviation"
+    regions = None if diverging else _LAST_REGIONS
+
+    try:
+        raw = render_result_figures(scalar_values=values, scalar_name=key,
+                                    regions=regions, dpi=150)
+        encoded = {name: "data:image/png;base64," + _b64(png) for name, png in raw.items()}
+        note = ("Single-subject descriptive statistics — distribution and "
+                "per-region summaries for this scan only; not a group "
+                "comparison and not for diagnostic use.")
+        if not diverging and (not regions or len(regions) < 2) and "by_region" not in raw:
+            note += (" 'By-region' omitted: fewer than 2 bone regions were "
+                    "segmented — nothing to compare.")
+        elif diverging:
+            note += (" 'By-region' omitted: Mode B has one registered surface "
+                    "(no per-region breakdown).")
+        with state:
+            state.stats_figures = encoded
+            state.stats_figures_note = note
+        state.flush()
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        with state:
+            state.stats_figures = {}
+            state.stats_figures_note = f"Figures failed: {e}"
+        state.flush()
+
+
+def _b64(data: bytes) -> str:
+    import base64
+    return base64.b64encode(data).decode("ascii")
+
+
+ctrl.refresh_stats_figures = refresh_stats_figures
+
+
+def _figures_export_worker():
+    try:
+        mesh, key, _label = _active_scalar_mesh()
+        if mesh is None or key not in mesh.point_data:
+            raise RuntimeError("Nothing computed yet — run a compute first.")
+        values = np.asarray(mesh.point_data[key], dtype=np.float64)
+        diverging = state.mode == "B" and state.b_view == "deviation"
+        regions = None if diverging else _LAST_REGIONS
+
+        formats = [f.lower() for f in (state.figures_export_formats or [])]
+        if not formats:
+            raise RuntimeError("Pick at least one export format.")
+        dpi = int(state.figures_export_dpi)
+        if dpi <= 0:
+            raise RuntimeError("DPI must be positive.")
+
+        gen_key = uuid.uuid4().hex[:12]
+        out_dir = EXPORTS_DIR / "figures" / gen_key
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        links = []
+        for fmt in formats:
+            raw = render_result_figures(scalar_values=values, scalar_name=key,
+                                        regions=regions, fmt=fmt, dpi=dpi)
+            for name, data in raw.items():
+                fname = f"{name}.{fmt}"
+                (out_dir / fname).write_bytes(data)
+                links.append({"name": name, "fmt": fmt,
+                             "url": f"/downloads/figures/{gen_key}/{fname}"})
+
+        if not links:
+            raise RuntimeError("No figures available for the current result.")
+
+        with state:
+            state.figures_export_links = links
+            state.figures_export_busy = False
+            state.figures_export_msg = f"Exported {len(links)} file(s)."
+        state.flush()
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        with state:
+            state.figures_export_busy = False
+            state.figures_export_msg = f"Export failed: {e}"
+            state.figures_export_links = []
+        state.flush()
+
+
+def do_export_figures(*_a, **_k):
+    if state.figures_export_busy:
+        return
+    with state:
+        state.figures_export_busy = True
+        state.figures_export_msg = "Exporting…"
+        state.figures_export_links = []
+    state.flush()
+    threading.Thread(target=_figures_export_worker, daemon=True).start()
+
+
+ctrl.do_export_figures = do_export_figures
+
+
+# --------------------------------------------------------------------------- #
 # Hover picking: read the scalar(s) at the point under the cursor.
 #
 # Mode A / Mode-B-thickness: single "thickness_mm" readout (unchanged).
@@ -1544,6 +1683,8 @@ def _compute_worker(req_id: int | None = None):
                 region_label=region_label, offset_xyz=side["offset_xyz"],
             )
             _LAST_MESH["thickness"] = res["mesh"]
+            global _LAST_REGIONS
+            _LAST_REGIONS = res.get("regions")
             # Adopt the server's chosen region so the picker reflects reality,
             # WITHOUT re-triggering a recompute (only change when it differs).
             picked = res.get("region_label")
@@ -1606,6 +1747,9 @@ def _compute_worker(req_id: int | None = None):
         # Fresh geometry -> refresh the histogram + clip/visible-part stats
         # from the newly computed mesh's own scalar (display-only).
         refresh_histogram_and_clip()
+        # Statistics & Figures panel: publication-style PNGs from the SAME
+        # newly computed mesh's scalar (display-only, no recompute).
+        refresh_stats_figures()
 
         # After the first thickness compute for the active side, lazily load the
         # per-region preview thumbnails (cached per session/side). Skipped for
@@ -2348,6 +2492,82 @@ with SinglePageWithDrawerLayout(server) as layout:
                             html.Div(
                                 "n {{ clip_visible_stats.n }}",
                                 style="font-size:11px;color:#2f6b2f")
+
+            # ---- Statistics & Figures (publication-style, exportable) --------
+            # Renders core.stats.figures on the CURRENTLY COMPUTED result
+            # (display-only, same source mesh as the quick histogram above) and
+            # offers a PNG/TIFF/JPG + DPI export — mirroring the 3D Export panel
+            # below, at parity with the React frontend's figures section.
+            with v3.VExpansionPanel(title="Statistics & Figures"):
+                with v3.VExpansionPanelText():
+                    html.Div(
+                        "Publication-style figures for THIS scan only "
+                        "(descriptive, single-subject) — a distribution "
+                        "histogram and, when >= 2 bone regions were "
+                        "segmented, a per-region volume/boneness summary. "
+                        "Never a group comparison.",
+                        style="font-size:11px;color:#666;margin-bottom:8px;line-height:1.4")
+
+                    html.Div(
+                        "Nothing computed yet — run a compute first.",
+                        v_if="!Object.keys(stats_figures).length",
+                        style="font-size:12px;color:#888")
+
+                    with html.Template(
+                            v_for="(img, name) in stats_figures", key="name"):
+                        with html.Div(
+                            style="background:#fafafa;border:1px solid #eee;"
+                                  "border-radius:6px;padding:8px;margin-bottom:8px"):
+                            html.Div(
+                                "{{ name === 'histogram' ? 'Distribution' : "
+                                "'Per-region summary' }}",
+                                style="font-size:11px;font-weight:700;"
+                                      "letter-spacing:.04em;text-transform:uppercase;"
+                                      "color:#333;margin-bottom:4px")
+                            html.Img(src=("img",),
+                                    style="width:100%;height:auto;display:block;"
+                                          "border-radius:4px;background:#fff")
+
+                    html.Div(
+                        "{{ stats_figures_note }}", v_if="stats_figures_note",
+                        style="font-size:10px;color:#888;margin-top:2px;"
+                              "margin-bottom:8px;line-height:1.4")
+
+                    v3.VDivider(classes="my-3")
+
+                    v3.VCardSubtitle("Export figures", classes="px-0 pb-1")
+                    v3.VSelect(
+                        v_model=("figures_export_formats",),
+                        items=("figures_export_format_choices",),
+                        label="Formats", multiple=True, chips=True,
+                        density="compact", hide_details=True, variant="outlined",
+                        classes="mb-2")
+                    v3.VTextField(
+                        v_model=("figures_export_dpi",), label="DPI (raster)",
+                        type="number", density="compact", hide_details=True,
+                        variant="outlined", classes="mb-2")
+                    v3.VBtn("Export figures", block=True, color="primary",
+                            classes="mt-1", click=ctrl.do_export_figures,
+                            loading=("figures_export_busy",),
+                            disabled=("figures_export_busy",))
+                    v3.VAlert(text=("figures_export_msg",), v_if="figures_export_msg",
+                              density="compact", variant="tonal",
+                              type=("figures_export_msg.startsWith('Export failed') ? "
+                                    "'error' : 'success'",),
+                              classes="mt-2", style="font-size:12px")
+                    with html.Div(classes="mt-2",
+                                  style="display:flex;flex-wrap:wrap;gap:6px"):
+                        with html.Template(
+                                v_for="link in figures_export_links",
+                                key="link.name + link.fmt"):
+                            html.A(
+                                "{{ link.name }}.{{ link.fmt }}",
+                                href=("link.url",), download=True,
+                                target="_blank",
+                                style="display:inline-block;padding:4px 10px;"
+                                      "background:#1867c0;color:#fff;border-radius:4px;"
+                                      "font-size:12px;text-decoration:none;"
+                                      "font-weight:600")
 
             # Export panel.
             with v3.VExpansionPanel(title="Export"):

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from collections import OrderedDict
 
+import numpy as np
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
@@ -24,6 +25,7 @@ import core.resources as R
 import core.viz.slice as mpr
 from core import pipeline
 from core.export import export_bundle
+from core.stats.figures import render_result_figures
 
 router = APIRouter(prefix="/api")
 
@@ -86,6 +88,25 @@ class ExportReq(BaseModel):
     dpi: int = 300
     camera: dict | None = None
     manual_transform: list[list[float]] | None = None
+
+
+_FIGURE_NAMES = ("histogram", "by_region")
+
+
+class FiguresReq(BaseModel):
+    mode: str = "A"  # 'A' thickness | 'B' deviation
+    side: str | None = None
+    reference_side: str | None = None
+    target_side: str | None = None
+    region_label: int | None = None
+    params: dict = {}
+    which: list[str] | None = None   # subset of ("histogram", "by_region"); None = all that apply
+    manual_transform: list[list[float]] | None = None
+
+
+class ExportFiguresReq(FiguresReq):
+    formats: list[str] = ["png"]
+    dpi: int = 300
 
 
 def _params(d: dict) -> "P.Parameters":
@@ -538,6 +559,13 @@ def oblique_compare(sid: str, req: ObliqueCompareReq) -> dict:
         raise HTTPException(422, str(e))
 
 
+def _compare_cache_key(req: "CompareReq") -> str:
+    return hashlib.sha256(
+        f"cmp|{req.reference_side}|{req.target_side}|"
+        f"{json.dumps(req.params, sort_keys=True)}|{req.manual_transform}".encode()
+    ).hexdigest()[:16]
+
+
 @router.post("/session/{sid}/compare")
 def compare(sid: str, req: CompareReq) -> dict:
     s = _get_session(sid)
@@ -546,6 +574,16 @@ def compare(sid: str, req: CompareReq) -> dict:
     if not ref or not tgt:
         raise HTTPException(400, "unknown side(s)")
     params = _params(req.params)
+    # Cache by (sides, compare params, manual nudge) — mirrors /analyze's
+    # analyze_cache so switching back to an already-computed comparison (or the
+    # figures endpoint below) never re-runs registration + signed-distance.
+    key = _compare_cache_key(req)
+    cache = s.setdefault("compare_cache", OrderedDict())
+    hit = cache.get(key)
+    if hit is not None:
+        cache.move_to_end(key)
+        _stash_ar_mesh(s, hit["mesh"], hit["scalar"], hit["clim"], params.mode_b_colormap)
+        return hit["response"]
     try:
         with R.COMPUTE_SEMAPHORE:  # bound concurrent heavy computes (peak RAM)
             res = pipeline.compare_sides(ref, tgt, params,
@@ -554,24 +592,168 @@ def compare(sid: str, req: CompareReq) -> dict:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(422, f"comparison failed: {e}") from e
-    key = hashlib.sha256(
-        f"{sid}|cmp|{req.reference_side}|{req.target_side}|{json.dumps(req.params, sort_keys=True)}".encode()
-    ).hexdigest()[:16]
-    _stash_ar_mesh(s, res["mesh"], res["scalar"],
-                   (params.mode_b_center - params.mode_b_range_abs,
-                    params.mode_b_center + params.mode_b_range_abs),
-                   params.mode_b_colormap)
-    return {
+    clim = (params.mode_b_center - params.mode_b_range_abs,
+            params.mode_b_center + params.mode_b_range_abs)
+    _stash_ar_mesh(s, res["mesh"], res["scalar"], clim, params.mode_b_colormap)
+    response = {
         "geometry_url": _save_mesh(res["mesh"], key),
         "scalar": res["scalar"],
-        "scalar_range": [params.mode_b_center - params.mode_b_range_abs,
-                         params.mode_b_center + params.mode_b_range_abs],
+        "scalar_range": [clim[0], clim[1]],
         "colormap": params.mode_b_colormap,
         "steps": params.mode_b_colorbar_steps,
         "stats": res["stats"],
         "registration": res["registration"],
         "hover_scalars": res.get("hover_scalars", [res["scalar"]]),
     }
+    cache[key] = {"response": response, "mesh": res["mesh"], "scalar": res["scalar"], "clim": clim}
+    while len(cache) > 6:            # bound RAM: a handful of recent results per session
+        cache.popitem(last=False)
+    return response
+
+
+# --------------------------------------------------------------------------- #
+# Statistics figures (publication-style PNG/TIFF/JPG of the active scalar field
+# + per-region summary) — reuses the SAME analyze/compare cache the interactive
+# viewer already populates, so it never re-runs the heavy pipeline just to draw
+# a histogram. Light work (matplotlib only); outside COMPUTE_SEMAPHORE on a
+# cache hit, and only takes the semaphore on a genuine cache miss (identical to
+# /analyze and /compare's own behaviour).
+# --------------------------------------------------------------------------- #
+def _result_for_figures(s: dict, req: "FiguresReq", params) -> tuple[object, str, list[dict] | None]:
+    """Return (mesh, scalar_name, regions) for the requested mode, reusing the
+    analyze_cache (Mode A) / compare_cache (Mode B) populated by /analyze and
+    /compare — computing (under COMPUTE_SEMAPHORE) only on a cache miss."""
+    if req.mode.upper() == "B":
+        ref_name = req.reference_side or "left"
+        tgt_name = req.target_side or "right"
+        ref = s["sides"].get(ref_name)
+        tgt = s["sides"].get(tgt_name)
+        if not ref or not tgt:
+            raise HTTPException(400, "unknown side(s) for Mode B figures")
+        creq = CompareReq(reference_side=ref_name, target_side=tgt_name,
+                          params=req.params, manual_transform=req.manual_transform)
+        key = _compare_cache_key(creq)
+        cache = s.setdefault("compare_cache", OrderedDict())
+        hit = cache.get(key)
+        if hit is not None:
+            cache.move_to_end(key)
+            mesh = hit["mesh"]
+        else:
+            try:
+                with R.COMPUTE_SEMAPHORE:
+                    res = pipeline.compare_sides(ref, tgt, params,
+                                                 manual_transform=req.manual_transform)
+            except NotImplementedError as e:
+                raise HTTPException(501, str(e)) from e
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(422, f"comparison failed: {e}") from e
+            clim = (params.mode_b_center - params.mode_b_range_abs,
+                    params.mode_b_center + params.mode_b_range_abs)
+            _stash_ar_mesh(s, res["mesh"], res["scalar"], clim, params.mode_b_colormap)
+            response = {
+                "geometry_url": _save_mesh(res["mesh"], key),
+                "scalar": res["scalar"],
+                "scalar_range": [clim[0], clim[1]],
+                "colormap": params.mode_b_colormap,
+                "steps": params.mode_b_colorbar_steps,
+                "stats": res["stats"],
+                "registration": res["registration"],
+                "hover_scalars": res.get("hover_scalars", [res["scalar"]]),
+            }
+            cache[key] = {"response": response, "mesh": res["mesh"],
+                         "scalar": res["scalar"], "clim": clim}
+            while len(cache) > 6:
+                cache.popitem(last=False)
+            mesh = res["mesh"]
+        return mesh, "deviation_mm", None  # Mode B has no per-region breakdown (single reg. surface)
+
+    # Mode A (default): thickness on a single side, reusing analyze_cache.
+    side_name = req.side or next(iter(s["sides"]))
+    side = s["sides"].get(side_name)
+    if not side:
+        raise HTTPException(400, f"unknown side '{side_name}'")
+    key = hashlib.sha256(
+        f"{side_name}|{req.region_label}|{json.dumps(req.params, sort_keys=True)}".encode()
+    ).hexdigest()[:16]
+    cache = s.setdefault("analyze_cache", OrderedDict())
+    hit = cache.get(key)
+    if hit is not None:
+        cache.move_to_end(key)
+        return hit["mesh"], "thickness_mm", hit["response"]["regions"]
+
+    if side.get("arr") is None:
+        raise HTTPException(400, "Mode A figures need a volume side, not a bare mesh")
+    try:
+        with R.COMPUTE_SEMAPHORE:
+            res = pipeline.analyze_thickness(side["arr"], side["spacing"], params,
+                                             region_label=req.region_label,
+                                             offset_xyz=side["offset_xyz"])
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    clim = (params.mode_a_range_min, params.mode_a_range_max)
+    _stash_ar_mesh(s, res["mesh"], "thickness_mm", clim, params.mode_a_colormap)
+    response = {
+        "geometry_url": _save_mesh(res["mesh"], key),
+        "scalar": "thickness_mm",
+        "scalar_range": [params.mode_a_range_min, params.mode_a_range_max],
+        "colormap": params.mode_a_colormap,
+        "steps": params.mode_a_colorbar_steps,
+        "region_label": res["region_label"],
+        "regions": res["regions"],
+        "stats": res["stats"],
+        "metal_fraction": res["metal_fraction"],
+    }
+    cache[key] = {"response": response, "mesh": res["mesh"], "clim": clim}
+    while len(cache) > 6:
+        cache.popitem(last=False)
+    return res["mesh"], "thickness_mm", res["regions"]
+
+
+@router.post("/session/{sid}/figures")
+def figures(sid: str, req: FiguresReq) -> dict:
+    """Render publication-style statistics figures for the (cached) computed result.
+
+    Body: ``{mode: 'A'|'B', side|reference_side/target_side, region_label, params,
+    which?: ['histogram','by_region']}``. Reuses the /analyze or /compare cache
+    (see ``_result_for_figures``) so this never re-runs segmentation/thickness/
+    registration just to draw a figure.
+
+    Returns ``{"figures": {name: base64 PNG}, "note": str}``. ``note`` states the
+    single-subject / descriptive scope, and — when ``by_region`` was requested
+    but omitted (fewer than 2 regions, or Mode B) — explains why.
+    """
+    import base64
+
+    s = _get_session(sid)
+    if req.mode.upper() not in ("A", "B"):
+        raise HTTPException(422, "mode must be 'A' or 'B'")
+    params = _params(req.params)
+    mesh, scalar_name, regions = _result_for_figures(s, req, params)
+
+    values = np.asarray(mesh.point_data.get(scalar_name), dtype=np.float64) \
+        if mesh is not None and scalar_name in getattr(mesh, "point_data", {}) else None
+    if values is None or values.size == 0:
+        raise HTTPException(422, f"no '{scalar_name}' scalar on the computed surface")
+
+    which = req.which if req.which else list(_FIGURE_NAMES)
+    unknown = [w for w in which if w not in _FIGURE_NAMES]
+    if unknown:
+        raise HTTPException(422, f"unknown figure name(s) {unknown}; expected {_FIGURE_NAMES}")
+
+    raw = render_result_figures(scalar_values=values, scalar_name=scalar_name,
+                                regions=regions, which=which, fmt="png", dpi=300)
+    encoded = {name: base64.b64encode(png).decode("ascii") for name, png in raw.items()}
+
+    note = ("Single-subject descriptive statistics — distribution and per-region "
+            "summaries for this scan only; not a group comparison and not for "
+            "diagnostic use.")
+    if "by_region" in which and "by_region" not in raw:
+        reason = ("Mode B has one registered surface (no per-region breakdown)."
+                  if req.mode.upper() == "B" else
+                  "fewer than 2 bone regions were segmented — nothing to compare.")
+        note += f" 'by_region' omitted: {reason}"
+
+    return {"figures": encoded, "note": note}
 
 
 def _compute_for_export(s: dict, req: "ExportReq", params) -> tuple:
@@ -642,3 +824,74 @@ def export(sid: str, req: ExportReq) -> dict:
 
     urls = {fmt: f"/api/exports/{key}/{Path(p).name}" for fmt, p in files.items()}
     return {"files": urls, "mode": req.mode.upper(), "scalar": scalar}
+
+
+_FIGURE_RASTER_FORMATS = ("png", "tiff", "jpg")
+
+
+@router.post("/session/{sid}/export-figures")
+def export_figures(sid: str, req: ExportFiguresReq) -> dict:
+    """Render the statistics figures to DOWNLOADABLE files at a chosen dpi/format.
+
+    Body: same as ``/figures`` plus ``{formats: ["png","tiff",...], dpi}``.
+    Writes ``histogram.<fmt>`` / ``by_region.<fmt>`` under ``/api/exports/<key>/``
+    (mirroring the geometry export's directory-per-request convention) and
+    returns ``{"files": {"histogram": url, "by_region": url, ...}, "note": str}``.
+    Each requested figure is written in EVERY requested format (so 2 figures x 2
+    formats = 4 files), named ``<figure>.<fmt>``; when >1 format is requested the
+    keys become ``<figure>_<fmt>``.
+    """
+    import base64
+
+    s = _get_session(sid)
+    if req.mode.upper() not in ("A", "B"):
+        raise HTTPException(422, "mode must be 'A' or 'B'")
+    if not req.formats:
+        raise HTTPException(422, "at least one export format is required")
+    fmts = [f.lower() for f in req.formats]
+    bad = [f for f in fmts if f not in _FIGURE_RASTER_FORMATS]
+    if bad:
+        raise HTTPException(422, f"unsupported figure format(s) {bad}; expected {_FIGURE_RASTER_FORMATS}")
+    if req.dpi <= 0:
+        raise HTTPException(422, "dpi must be positive")
+
+    params = _params(req.params)
+    mesh, scalar_name, regions = _result_for_figures(s, req, params)
+    values = np.asarray(mesh.point_data.get(scalar_name), dtype=np.float64) \
+        if mesh is not None and scalar_name in getattr(mesh, "point_data", {}) else None
+    if values is None or values.size == 0:
+        raise HTTPException(422, f"no '{scalar_name}' scalar on the computed surface")
+
+    which = req.which if req.which else list(_FIGURE_NAMES)
+    unknown = [w for w in which if w not in _FIGURE_NAMES]
+    if unknown:
+        raise HTTPException(422, f"unknown figure name(s) {unknown}; expected {_FIGURE_NAMES}")
+
+    key = hashlib.sha256(
+        f"{sid}|figexp|{req.mode}|{json.dumps(req.model_dump(), sort_keys=True, default=str)}".encode()
+    ).hexdigest()[:16]
+    out_dir = EXPORTS / key
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    urls: dict[str, str] = {}
+    produced: set[str] = set()
+    for fmt in fmts:
+        raw = render_result_figures(scalar_values=values, scalar_name=scalar_name,
+                                    regions=regions, which=which, fmt=fmt, dpi=req.dpi)
+        produced |= set(raw)
+        for name, data in raw.items():
+            out_name = f"{name}.{fmt}" if len(fmts) == 1 else f"{name}_{fmt}.{fmt}"
+            (out_dir / out_name).write_bytes(data)
+            out_key = name if len(fmts) == 1 else f"{name}_{fmt}"
+            urls[out_key] = f"/api/exports/{key}/{out_name}"
+
+    note = ("Single-subject descriptive statistics — distribution and per-region "
+            "summaries for this scan only; not a group comparison and not for "
+            "diagnostic use.")
+    if "by_region" in which and "by_region" not in produced:
+        reason = ("Mode B has one registered surface (no per-region breakdown)."
+                  if req.mode.upper() == "B" else
+                  "fewer than 2 bone regions were segmented — nothing to compare.")
+        note += f" 'by_region' omitted: {reason}"
+
+    return {"files": urls, "mode": req.mode.upper(), "scalar": scalar_name, "note": note}
