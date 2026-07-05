@@ -31,13 +31,16 @@ exposes the identical feature set.</sub>
 | ![Thickness map](docs/assets/phase2_thickness.png) | ![Signed deviation map](docs/assets/qa_trame_rework_deviation.png) |
 | One scan. Green = thin wall, red = thick, in mm. | Two sides registered; red = bone gained, blue = lost. |
 
-![Cortical thickness on the bundled demo — smooth reconstructed surface with the
-discrete Fig-2 colorbar](docs/assets/demo_smooth_thickness.png)
-<sub>Live output on the de-identified demo, rendered in the paper's Fig-2 layout: the
-coloured bone (smooth, watertight, evenly-remeshed surface — supersample + windowed-sinc
-+ pyacvd isotropic remesh) and the discrete green→red thickness colorbar, exportable at
-any DPI. The reconstruction is <b>display-only</b> — cortical thickness is computed on
-the raw mask (the scalar is re-sampled onto the remeshed surface, not recomputed).</sub>
+![Cortical thickness on the bundled demo at native resolution — the auto-isolated
+proximal humerus with a smooth reconstructed surface and the Fig-2 colorbar](docs/assets/demo_best_thickness.png)
+<sub>Live output on the de-identified demo at <b>native 0.977 mm</b> (keep
+<code>THREEDORTH_MAX_WORK_VOXELS</code> above the scan's voxel count so it isn't
+downsampled). At full resolution the glenohumeral gap resolves, so the app
+<b>auto-isolates the proximal humerus</b> as its own connected component, and the
+display-only reconstruction (supersample → windowed-sinc → pyacvd isotropic remesh) gives
+a smooth, evenly-triangulated shell — the paper's Fig-2 look, in ~18&nbsp;s / ~1.7&nbsp;GB
+on a laptop. Cortical thickness is computed on the raw mask (the scalar is re-sampled onto
+the remeshed surface, not recomputed).</sub>
 
 - **Mode A** segments the bone from its CT density, computes wall thickness at
   every surface point, and colours it with the paper's green→red scale.
