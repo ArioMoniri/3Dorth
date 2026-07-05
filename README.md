@@ -121,11 +121,38 @@ It picks between four paths (all end in one public Cloudflare link, no inbound p
   Remove it all with `./scripts/setup.sh --uninstall`.
 - **Normal Docker** (`serve-public.sh` / `deploy.sh`) — a plain VM with Docker.
 
-**The public link auto-heals.** `scripts/tunnel.sh` (run for you at the end) detects
-which tunnel actually works from your network and keeps a fresh URL in
-`outputs/public_urls.json` + the app's top bar: **Cloudflare** if port 7844 is open,
-else **Pinggy** or **ngrok** over 443 (common on locked-down pods where 7844 is
-firewalled). Lifecycle:
+**The public link auto-heals.** `scripts/tunnel.sh` (run for you at the end) *tries and
+verifies* each provider and keeps the first that actually serves in
+`outputs/public_urls.json` + the app's top bar: **relay** (if you set `SSH_RELAY`) →
+**ngrok** → **Cloudflare** (if 7844/443 edge is open) → **Pinggy** (443) → **serveo**
+(22) → **localhost.run** (22) → **Tailscale Funnel** (if you set `TS_AUTHKEY`). For
+SSH-based providers it accepts the link as soon as the SSH child is up and a URL is
+emitted — it does **not** reject a working tunnel just because the locked pod can't
+`curl` its own public edge (a link it can't self-verify is still published, flagged
+`self_verified:false`).
+
+**Egress-locked pod? Diagnose first, don't guess.**
+
+```bash
+./scripts/egress_probe.sh          # OPEN/BLOCKED table of every host:port a tunnel needs
+                                   # + a one-line "USE →" verdict (and detects the Pinggy
+                                   # false-reject trap: control open, public edge blocked)
+```
+
+Knobs (secrets from ENV only, never written to the repo):
+`TUNNEL_PROVIDER=pinggy|serveo|cloudflare|relay|tailscale` forces one;
+`SSH_RELAY=user@host:443` reverse-forwards to a box **you** control (needs
+`GatewayPorts clientspecified`); `TS_AUTHKEY=…` uses userspace Tailscale Funnel.
+**Always-works fallback** (no public egress needed) — one SSH hop from your machine; the
+exact command (with the real ports) is printed at startup and saved to
+`outputs/ssh_access.txt`:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 -L 8081:127.0.0.1:8081 -p <ssh-port> <user>@<host>
+# then open http://localhost:8000 (React) and http://localhost:8081 (trame)
+```
+
+Lifecycle:
 
 ```bash
 ./scripts/setup.sh --restart     # kill previous + bring it back up (reuses installs)

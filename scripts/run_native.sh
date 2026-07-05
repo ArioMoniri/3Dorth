@@ -29,16 +29,20 @@ _kill_running() {
   pkill -9 -f "cloudflared tunnel"   2>/dev/null; pkill -9 -f "ssh .*pinggy" 2>/dev/null
   pkill -9 -f "ngrok http"           2>/dev/null
   pkill -9 -f "scripts/tunnel.sh"    2>/dev/null; pkill -9 -f "scripts/share.sh" 2>/dev/null
-  # by the ports a previous run recorded (kills a stray listener even if renamed)
+  # Free BOTH the recorded ports AND the 3Dorth defaults. We parse ports.env WITHOUT
+  # sourcing it: sourcing would leak a previously-DRIFTED $API_PORT into this run, and
+  # pick_ports.sh would then reuse that stale port instead of reclaiming 8000 — which is
+  # exactly what breaks `ssh -L 8000` and causes "Failed to fetch" after a restart.
+  _free_port() {
+    if command -v fuser >/dev/null 2>&1; then fuser -k "${1}/tcp" 2>/dev/null
+    elif command -v lsof  >/dev/null 2>&1; then lsof -ti tcp:"$1" 2>/dev/null | xargs -r kill -9 2>/dev/null; fi
+  }
   if [ -f outputs/ports.env ]; then
-    # shellcheck disable=SC1091
-    . outputs/ports.env 2>/dev/null || true
-    for p in "${API_PORT:-}" "${TRAME_PORT:-}" "${REACT_PORT:-}"; do
-      [ -n "$p" ] || continue
-      if command -v fuser >/dev/null 2>&1; then fuser -k "${p}/tcp" 2>/dev/null
-      elif command -v lsof  >/dev/null 2>&1; then lsof -ti tcp:"$p" 2>/dev/null | xargs -r kill -9 2>/dev/null; fi
-    done
+    while IFS='=' read -r _k _v; do
+      case "$_k" in API_PORT|TRAME_PORT|REACT_PORT) [ -n "$_v" ] && _free_port "$_v" ;; esac
+    done < outputs/ports.env
   fi
+  for p in 8000 8081 8088; do _free_port "$p"; done   # reclaim the defaults so ports don't drift
   sleep 2
 }
 
@@ -200,7 +204,20 @@ fi
 # ---- 8. public tunnel (auto-detects cloudflare/pinggy/ngrok for THIS network) ----
 printf 'REACT_PORT=%s\nTRAME_PORT=%s\nAPI_PORT=%s\n' "$APP_PORT" "$TRAME_PORT" "$APP_PORT" > outputs/ports.env
 [ -n "$appok" ] || exit 1
+
+# Access that ALWAYS works, even when every public tunnel is egress-blocked: one SSH -L
+# hop from the viewer's machine. Print it with the REAL ports (both API + trame) and
+# record it, so nobody has to guess which port drifted.
+SSHFWD="-L ${APP_PORT}:127.0.0.1:${APP_PORT}"
+[ "$WITH_TRAME" = 1 ] && SSHFWD="$SSHFWD -L ${TRAME_PORT}:127.0.0.1:${TRAME_PORT}"
+printf 'ssh %s -p <ssh-port> <user>@<host>\n' "$SSHFWD" > outputs/ssh_access.txt
+echo; ok "Reach it from your machine even if no public link works (one SSH hop):"
+printf "    ${BOLD}ssh %s -p <ssh-port> <user>@<host>${RST}\n" "$SSHFWD"
+printf "    then open  ${BOLD}http://localhost:${APP_PORT}${RST}  (React)"
+[ "$WITH_TRAME" = 1 ] && printf "   and  ${BOLD}http://localhost:${TRAME_PORT}${RST}  (trame)"
+echo
+
 # shellcheck disable=SC1091
 . ./scripts/setup_tunnel_token.sh    # optionally set up ngrok (stable, no time limit)
-echo; step "Opening a public link (auto-picks a tunnel that works from here; Ctrl-C stops it, app keeps running)…"
+echo; step "Opening a public link (auto-picks a tunnel that works from here; if all are blocked, run ./scripts/egress_probe.sh)…"
 exec ./scripts/tunnel.sh "$APP_PORT" "$TRAME_PORT"
