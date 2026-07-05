@@ -24,15 +24,25 @@ else
     if [ -z "$(_ng)" ]; then
       arch=amd64; [ "$(uname -m)" = aarch64 ] && arch=arm64
       echo "  installing ngrok (local, ./.tools)…"
-      curl -fsSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${arch}.tgz" -o "$TOOLS/ngrok.tgz" 2>/dev/null \
-        && tar xzf "$TOOLS/ngrok.tgz" -C "$TOOLS" 2>/dev/null && rm -f "$TOOLS/ngrok.tgz"
+      url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${arch}.tgz"
+      if curl -fSL "$url" -o "$TOOLS/ngrok.tgz" 2>"$TOOLS/ngrok.err"; then
+        tar xzf "$TOOLS/ngrok.tgz" -C "$TOOLS" 2>>"$TOOLS/ngrok.err" && rm -f "$TOOLS/ngrok.tgz"
+        [ -f "$TOOLS/ngrok" ] && chmod +x "$TOOLS/ngrok"
+      else
+        echo "  ${YEL:-}!${RST:-} ngrok download failed: $(tail -1 "$TOOLS/ngrok.err" 2>/dev/null)"
+        echo "     (bin.equinox.io may be blocked on this pod — see the manual step in the README/chat)"
+      fi
     fi
     NG="$(_ng)"
-    if [ -n "$NG" ] && "$NG" config add-authtoken "$TOKEN" >/dev/null 2>&1; then
-      export TUNNEL_PROVIDER=ngrok
-      echo "  ${GRN:-}✓${RST:-} ngrok configured — using it for a stable, no-time-limit link"
+    if [ -n "$NG" ] && "$NG" version >/dev/null 2>&1; then
+      if "$NG" config add-authtoken "$TOKEN" 2>"$TOOLS/ngrok.err"; then
+        export TUNNEL_PROVIDER=ngrok
+        echo "  ${GRN:-}✓${RST:-} ngrok configured — stable, no-time-limit link"
+      else
+        echo "  ${YEL:-}!${RST:-} ngrok token config failed: $(tail -1 "$TOOLS/ngrok.err" 2>/dev/null) — using Pinggy"
+      fi
     else
-      echo "  ${YEL:-}!${RST:-} ngrok setup failed — falling back to Pinggy"
+      echo "  ${YEL:-}!${RST:-} ngrok binary not runnable (download/arch issue) — using Pinggy"
     fi
   fi
 fi
