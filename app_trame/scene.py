@@ -107,11 +107,13 @@ def build_thickness_scene(plotter: pv.Plotter, mesh, *, params=None, side_label=
     return plotter
 
 
-def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
+def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None, second_mesh=None):
     """Render the Mode B signed-deviation surface with a diverging colormap.
 
     ``mesh`` carries a ``deviation_mm`` point scalar (from
     ``core.pipeline.compare_sides``). Colorbar is symmetric about the center.
+    When ``second_mesh`` is given (the bilateral-difference view: Left↔Left +
+    Right↔Right), it is drawn with the SAME diverging LUT and one shared colorbar.
     """
     params = params or P.default_parameters()
     plotter.clear()
@@ -120,14 +122,16 @@ def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
 
     center = params.mode_b_center
     span = params.mode_b_range_abs
+    clim = [center - span, center + span]
+    cmap = get_cmap(params.mode_b_colormap)
     csi = int(getattr(params, "color_smooth_iters", 0) or 0)
     dev_scalar = smooth_point_scalar_display(mesh, "deviation_mm", csi)
     plotter.add_mesh(
         mesh,
         scalars=dev_scalar,
-        cmap=get_cmap(params.mode_b_colormap),
+        cmap=cmap,
         n_colors=params.mode_b_colorbar_steps,
-        clim=[center - span, center + span],
+        clim=clim,
         smooth_shading=True,
         scalar_bar_args=dict(
             title="Surface difference (mm): +out / -in", vertical=True,
@@ -137,6 +141,13 @@ def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
             italic=False, bold=False, font_family="arial",
         ),
     )
+    if second_mesh is not None:
+        plotter.add_mesh(
+            second_mesh,
+            scalars=smooth_point_scalar_display(second_mesh, "deviation_mm", csi),
+            cmap=cmap, n_colors=params.mode_b_colorbar_steps, clim=clim,
+            smooth_shading=True, show_scalar_bar=False,
+        )
     _apply_view(plotter, params)
     return plotter
 

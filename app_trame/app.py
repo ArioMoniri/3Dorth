@@ -108,7 +108,8 @@ PLOTTER = pv.Plotter(off_screen=True)
 SESSION: dict = {"arr": None, "spacing": None, "meta": None, "sides": {},
                  "is_mesh": False, "series": [], "series_meta": {}, "layout": "auto"}
 _LOCK = threading.Lock()
-_LAST_MESH = {"thickness": None, "deviation": None, "thickness_second": None}
+_LAST_MESH = {"thickness": None, "deviation": None, "thickness_second": None,
+              "deviation_second": None}
 # Region list from the last Mode-A thickness compute ([{label, volume_cm3,
 # boneness}], see core.pipeline.analyze_thickness) — feeds the per-region
 # statistics figure. Mode B has no per-region breakdown (single registered
@@ -474,6 +475,7 @@ for _c in control_specs():
 
 state.mode = "A"                 # "A" or "B" (DERIVED from colour_by; kept internal)
 state.colour_by = "thickness"    # merged control: "thickness" | "difference"
+state.diff_bilateral = False     # Show=Bilateral in Difference: L↔L + R↔R together
 state.side = "left"              # active side for thickness views
 state.ref_side = "left"          # Mode B reference
 state.tgt_side = "right"         # Mode B target
@@ -2049,6 +2051,7 @@ def _compute_worker(req_id: int | None = None):
                                    "all-visits map.")
             res = pipeline.compare_series_group(group, params)
             _LAST_MESH["deviation"] = res["mesh"]
+            _LAST_MESH["deviation_second"] = None
             build_group_scene(PLOTTER, res["mesh"], res.get("ghosts", []), params=params)
             st = res["stats"]
             coloured = "latest" if res["colored_index"] != 0 else "baseline"
@@ -2061,6 +2064,35 @@ def _compute_worker(req_id: int | None = None):
                  ("max excess (mm)", f"{st['max_positive']:.3f}"),
                  ("max deficit (mm)", f"{st['max_negative']:.3f}"),
                  ("coloured surface", coloured)],
+            )
+        elif state.diff_bilateral and _has_bilateral_pairs():
+            # Bilateral difference: Left↔Left AND Right↔Right of the current
+            # reference/target visits, rendered together on one shared scale.
+            manual = _manual_transform_matrix()
+
+            def _pair(name):
+                r = sides.get(_side_key_in_series_of(state.ref_side, name))
+                t = sides.get(_side_key_in_series_of(state.tgt_side, name))
+                return r, t
+
+            (refL, tgtL), (refR, tgtR) = _pair("left"), _pair("right")
+            if not all(x and x.get("arr") is not None for x in (refL, tgtL, refR, tgtR)):
+                raise RuntimeError("Bilateral difference needs volume Left+Right in both visits.")
+            resL = pipeline.compare_sides(refL, tgtL, params, manual_transform=manual)
+            resR = pipeline.compare_sides(refR, tgtR, params, manual_transform=manual)
+            _LAST_MESH["deviation"] = resL["mesh"]
+            _LAST_MESH["deviation_second"] = resR["mesh"]
+            build_deviation_scene(PLOTTER, resL["mesh"], params=params,
+                                  second_mesh=resR["mesh"])
+            res = resL  # shared tail reads res["hover_scalars"]
+            sL, sR = resL["stats"], resR["stats"]
+            gL, gR = resL["registration"], resR["registration"]
+            html_out = _meta_html() + _stat_rows(
+                "Bilateral difference (Left↔Left · Right↔Right)",
+                [("Left mean (mm)", f"{sL['mean']:.3f}"),
+                 ("Left inlier", f"{gL['inlier_fraction']:.3f}"),
+                 ("Right mean (mm)", f"{sR['mean']:.3f}"),
+                 ("Right inlier", f"{gR['inlier_fraction']:.3f}")],
             )
         else:  # Mode B deviation (one pair)
             ref = sides.get(state.ref_side)
@@ -2075,6 +2107,7 @@ def _compute_worker(req_id: int | None = None):
             manual = _manual_transform_matrix()
             res = pipeline.compare_sides(ref, tgt, params, manual_transform=manual)
             _LAST_MESH["deviation"] = res["mesh"]
+            _LAST_MESH["deviation_second"] = None
             build_deviation_scene(PLOTTER, res["mesh"], params=params)
             st = res["stats"]
             reg = res["registration"]
@@ -2285,7 +2318,9 @@ def apply_display_only(*_a, **_k):
         return  # nothing rendered yet; the next compute will pick up the params
     try:
         if diverging:
-            build_deviation_scene(PLOTTER, mesh, params=params)
+            # Carry the bilateral second surface through a display-only recolour.
+            build_deviation_scene(PLOTTER, mesh, params=params,
+                                  second_mesh=_LAST_MESH.get("deviation_second"))
         elif state.side == "both":
             build_thickness_scene(PLOTTER, mesh, params=params,
                                   side_label="Left + Right",
@@ -2325,6 +2360,7 @@ _DISPLAY_ONLY_PARAM_KEYS = [c["key"] for c in control_specs() if not c["recomput
 # Non-registry selectors / knobs that also require a fresh pipeline run.
 _RECOMPUTE_STATE_KEYS = [
     "side", "mode", "b_view", "ref_side", "tgt_side", "compare_group_mode",
+    "diff_bilateral",
     "manual_enabled", "manual_tx", "manual_ty", "manual_tz",
     "manual_rx", "manual_ry", "manual_rz",
 ]
@@ -2755,6 +2791,28 @@ def _series_of(sideKey):
     return sideKey.split("/")[0] if "/" in sideKey else "s0"
 
 
+def _bare_side(k):
+    return k.split("/", 1)[1] if "/" in k else k
+
+
+def _side_key_in_series_of(anchor_key, name):
+    """The side named ``name`` in the series that owns ``anchor_key`` (or None)."""
+    sid = _series_of(anchor_key)
+    entry = next((s for s in SESSION.get("series", []) if s["id"] == sid), None)
+    if entry is None:
+        return None
+    return next((k for k in entry["sides"] if _bare_side(k) == name), None)
+
+
+def _has_bilateral_pairs():
+    """True when both the reference and target visits have a Left AND a Right."""
+    for anchor in (state.ref_side, state.tgt_side):
+        for name in ("left", "right"):
+            if _side_key_in_series_of(anchor, name) is None:
+                return False
+    return True
+
+
 ctrl.set_within_lr = set_within_lr
 
 
@@ -2899,6 +2957,14 @@ with SinglePageWithDrawerLayout(server) as layout:
                     html.Div("📊 {{ group_msg }}",
                              v_if="compare_group_mode",
                              style="font-size:11px;color:#1a4fd6;margin-top:4px;line-height:1.4")
+                # Bilateral difference: Left↔Left + Right↔Right together (pair mode,
+                # bilateral session). Hidden in group mode.
+                v3.VSwitch(
+                    v_model=("diff_bilateral", False),
+                    label="Show both sides (Left↔Left + Right↔Right)",
+                    v_if="is_bilateral && !compare_group_mode",
+                    density="compact", hide_details=True, color="primary",
+                    classes="mb-1")
                 # In group mode the ref/target PAIR is meaningless — the anatomical
                 # side is chosen by this one selector (its bare name); the target
                 # selector + swap are hidden so nothing can silently repick.
