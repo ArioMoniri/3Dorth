@@ -23,6 +23,7 @@ import {
   createSession,
   uploadFile,
   compareGroup,
+  removeSeries,
   analyze,
   compare,
   exportResult,
@@ -543,6 +544,27 @@ export default function App() {
       if (requestIdRef.current === myId) setComputeError(readableError(e));
     } finally {
       if (requestIdRef.current === myId) setComputing(false);
+    }
+  }
+
+  async function onRemoveSeries(seriesId) {
+    if (!session?.session_id) return;
+    try {
+      const res = await removeSeries(session.session_id, seriesId);
+      setSession((prev) => ({
+        ...prev,
+        series: res.series,
+        all_sides: res.all_sides,
+        sides: res.all_sides,
+      }));
+      const all = res.all_sides || [];
+      if (!all.includes(referenceSide)) setReferenceSide(all[0] ?? null);
+      if (!all.includes(targetSide)) setTargetSide(all[1] ?? all[0] ?? null);
+      setGroupGhosts([]);
+      setGroupInfo(null);
+      setDeviationResult(null);
+    } catch (e) {
+      setComputeError(`Could not remove series: ${readableError(e)}`);
     }
   }
 
@@ -1182,6 +1204,7 @@ export default function App() {
           onCompare={runCompare}
           computing={computing}
           onUpload={onUpload}
+          onRemoveSeries={onRemoveSeries}
           uploading={uploading}
           // manual anchor
           nudge={nudge}
@@ -1366,6 +1389,48 @@ export default function App() {
             measurePoints={measurePoints}
             ghosts={compareMode === 'group' && isDeviationView ? groupGhosts : NO_GHOSTS}
           />
+
+          {/* Always-visible banner: exactly WHAT is on screen and, for a
+              difference map, what + / − mean on the bone. */}
+          {displayGeometry && (() => {
+            const inv = values?.signed_distance_sign === 'target_outside_negative';
+            const ep = colormapEndpoints(values?.mode_b_colormap || 'green_white_red');
+            let title;
+            let sub;
+            if (!isDeviationView) {
+              title = 'Cortical thickness';
+              sub = isBoth
+                ? 'Left + Right — each coloured by its own wall thickness'
+                : sideLabelOf(effectiveSide, session?.series);
+            } else if (compareMode === 'group') {
+              const ci = groupInfo?.colored_index;
+              const colored = ci === 0 ? 'baseline' : 'latest visit';
+              title = `Difference across ${groupInfo?.n_visits ?? ''} visits · ${cap(sideNameOf(referenceSide))}`.trim();
+              sub = `coloured on the ${colored} surface; other visits are faint ghosts`;
+            } else {
+              title = 'Difference between two scans';
+              sub = (
+                <>
+                  <strong>{sideLabelOf(targetSide, session?.series)}</strong> measured against{' '}
+                  <strong>{sideLabelOf(referenceSide, session?.series)}</strong>
+                </>
+              );
+            }
+            return (
+              <div className="view-banner">
+                <div className="view-banner-title">{title}</div>
+                <div className="view-banner-sub">{sub}</div>
+                {isDeviationView && (
+                  <div className="view-banner-key">
+                    <span className="vb-chip" style={{ background: ep.high }} />
+                    <span>{inv ? 'deficit' : 'excess'} — this surface sits <b>{inv ? 'inside' : 'outside'}</b> the one under it</span>
+                    <span className="vb-chip" style={{ background: ep.low }} />
+                    <span>{inv ? 'excess' : 'deficit'} — this surface sits <b>{inv ? 'outside' : 'inside'}</b> the one under it</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {displayGeometry && (
             <HoverTooltip

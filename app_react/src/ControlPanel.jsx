@@ -76,6 +76,7 @@ export default function ControlPanel({
   computing,
   // upload
   onUpload,
+  onRemoveSeries,
   uploading,
   // manual anchor
   nudge,
@@ -183,10 +184,11 @@ export default function ControlPanel({
               e.target.value = '';
             }}
           />
-          {uploading ? 'Uploading…' : 'Upload scan or mesh'}
+          {uploading ? 'Uploading…' : 'Upload NEW scan (replaces all)'}
         </label>
         <p className="panel-hint upload-hint">
-          Volumes (.zip DICOM, .nii, .nii.gz) or meshes (.stl, .ply, .obj, .vtp).
+          <strong>Replaces</strong> everything currently loaded (incl. the demo) with your
+          scan. Volumes (.zip DICOM, .nii, .nii.gz) or meshes (.stl, .ply, .obj, .vtp).
         </p>
 
         {/* Add-series: append a second/third scan (baseline vs follow-up …) to
@@ -204,12 +206,14 @@ export default function ControlPanel({
                   e.target.value = '';
                 }}
               />
-              {uploading ? 'Uploading…' : '＋ Add series (baseline / follow-up …)'}
+              {uploading ? 'Uploading…' : '＋ Add another visit (keeps current, to compare)'}
             </label>
-            {series.length > 1 && (
+            {series.length >= 1 && (
               <div className="series-list">
                 <div className="series-list-title">
-                  {series.length} series loaded — anchored against each other:
+                  {series.length === 1
+                    ? 'Loaded scan:'
+                    : `${series.length} series loaded — anchored against each other:`}
                 </div>
                 {series.map((s) => (
                   <div key={s.id} className="series-row" title={s.name}>
@@ -218,6 +222,17 @@ export default function ControlPanel({
                     <span className="series-sides">
                       {(s.sides || []).map((k) => prettySide(k, null)).join(' · ')}
                     </span>
+                    {series.length > 1 && onRemoveSeries && (
+                      <button
+                        type="button"
+                        className="series-remove"
+                        onClick={() => onRemoveSeries(s.id)}
+                        title={`Remove ${s.name} from this comparison`}
+                        aria-label={`Remove ${s.name}`}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

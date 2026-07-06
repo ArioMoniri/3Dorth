@@ -108,6 +108,30 @@ def test_upload_with_session_id_adds_series(monkeypatch):
         sess.SESSIONS.pop(sid, None)
 
 
+def test_remove_series_drops_it_and_its_sides(monkeypatch):
+    monkeypatch.setattr(pipeline, "split_sides", _fake_sides)
+    arr = np.zeros((4, 5, 6), np.int16)
+    resp = sess._new_session(arr, (1.0, 1.0, 1.0), {"series": "baseline"}, layout="bilateral")
+    sid = resp["session_id"]
+    s = sess._get_session(sid)
+    sess._add_series(s, sid, arr, (1.0, 1.0, 1.0), {"series": "follow-up"})
+    try:
+        r = CLIENT.delete(f"/api/session/{sid}/series/s1")
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["removed"] == "s1"
+        assert [e["id"] for e in j["series"]] == ["s0"]
+        assert all(not k.startswith("s1/") for k in j["all_sides"])
+        # cannot remove the last remaining series
+        r2 = CLIENT.delete(f"/api/session/{sid}/series/s0")
+        assert r2.status_code == 400
+        # unknown series
+        r3 = CLIENT.delete(f"/api/session/{sid}/series/s9")
+        assert r3.status_code == 400
+    finally:
+        sess.SESSIONS.pop(sid, None)
+
+
 def test_upload_without_session_id_is_new_session(monkeypatch):
     monkeypatch.setattr(pipeline, "split_sides", _fake_sides)
     monkeypatch.setattr(core_ingest, "is_mesh", lambda p: False)

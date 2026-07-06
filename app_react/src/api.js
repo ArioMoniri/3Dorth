@@ -128,6 +128,23 @@ export function compare(
   return postJSON(`/api/session/${sessionId}/compare`, body);
 }
 
+// DELETE /api/session/{sid}/series/{series_id} -> { series, all_sides, removed }
+// Drop one loaded series (a demo/visit) so the user can clear it and upload fresh.
+export async function removeSeries(sessionId, seriesId) {
+  const res = await fetch(
+    `/api/session/${sessionId}/series/${encodeURIComponent(seriesId)}`,
+    { method: 'DELETE' },
+  );
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    throw Object.assign(new Error(data?.detail || `${res.status} ${res.statusText}`), {
+      status: res.status,
+    });
+  }
+  return data;
+}
+
 // POST /api/session/{sid}/compare-group
 //   body: { sides_group:[baseline,...visits], params }
 //   -> { geometry_url, ghost_urls:[...], scalar, scalar_range, colormap, steps,

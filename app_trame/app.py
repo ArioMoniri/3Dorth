@@ -498,6 +498,8 @@ state.within_series = []
 # N-way "all visits at once" comparison mode + its readout.
 state.compare_group_mode = False
 state.group_msg = ""
+# Always-visible "what is on screen" banner.
+state.view_banner = "Loading…"
 # Deviation legend explanation: series-aware role labels + colormap-matched
 # swatch colours, so the diverging map's meaning (gained vs lost bone) is spelt out.
 state.dev_ref_label = "Left"
@@ -2105,6 +2107,7 @@ def _compute_worker(req_id: int | None = None):
             state.stats_html = html_out
             state.status = "done"
             state.status_msg = "Recompute complete."
+            _set_view_banner()
         # A recompute rebuilds the scene (plotter.clear()), which drops the measure
         # markers — re-add them so the on-screen markers stay consistent with the
         # still-displayed mm readout and the retained points.
@@ -2152,6 +2155,23 @@ def _side_label(name: str) -> str:
         if entry:
             return f"{entry['name']} · {pretty}"
     return pretty
+
+
+def _set_view_banner() -> None:
+    """Set the always-visible 'what is on screen' banner from the current state."""
+    try:
+        if state.mode == "A" or (state.mode == "B" and state.b_view == "thickness"):
+            what = ("Cortical thickness — Left + Right"
+                    if state.side == "both" else
+                    f"Cortical thickness — {_side_label(state.side)}")
+        elif state.compare_group_mode and len(SESSION.get("series", [])) >= 2:
+            what = f"All-visits difference · {state.group_msg or ''}".strip(" ·")
+        else:
+            what = (f"Difference — {_side_label(state.tgt_side)} vs "
+                    f"{_side_label(state.ref_side)} · red=excess / green=deficit")
+        state.view_banner = what
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _update_dev_labels(*_a, **_k):
@@ -2733,6 +2753,28 @@ def _series_of(sideKey):
 ctrl.set_within_lr = set_within_lr
 
 
+def remove_series(series_id, *_a, **_k):
+    """Drop one loaded series (demo/visit) so the user can clear it. Refuses to
+    remove the last remaining series (upload a new scan to replace)."""
+    with _LOCK:
+        series = SESSION.get("series", [])
+        entry = next((e for e in series if e["id"] == series_id), None)
+        if entry is None or len(series) <= 1:
+            return
+        for k in entry.get("sides", []):
+            SESSION["sides"].pop(k, None)
+        SESSION.setdefault("series_meta", {}).pop(series_id, None)
+        SESSION["series"] = [e for e in series if e["id"] != series_id]
+    _bump_session_gen()
+    with state:
+        _refresh_session_ui(preserve_roles=True)
+    state.flush()
+    recompute()
+
+
+ctrl.remove_series = remove_series
+
+
 # --------------------------------------------------------------------------- #
 # UI: registry-driven control renderer.
 # --------------------------------------------------------------------------- #
@@ -2812,6 +2854,11 @@ with SinglePageWithDrawerLayout(server) as layout:
     with layout.drawer as drawer:
         drawer.width = 380
         with v3.VCard(flat=True, classes="pa-2"):
+            # Always-visible "what is on screen" banner.
+            html.Div("{{ view_banner }}",
+                     style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;"
+                           "padding:7px 10px;font-size:13px;font-weight:600;color:#1e3a8a;"
+                           "margin-bottom:8px;line-height:1.35")
             # ---- Session: side + Mode B sub-view + Apply ---------------------
             v3.VCardTitle("Session", classes="text-subtitle-1 pb-1")
             v3.VSelect(v_model=("side",), items=("side_thickness_options",),
@@ -3023,6 +3070,9 @@ with SinglePageWithDrawerLayout(server) as layout:
                               style="font-weight:600;overflow:hidden;"
                                     "text-overflow:ellipsis;white-space:nowrap;flex:1")
                     html.Span("{{ s.sides }}", style="color:#777;font-size:11px")
+                    v3.VBtn("✕", v_if="n_series > 1", size="x-small", variant="text",
+                            density="compact", color="error",
+                            click=(ctrl.remove_series, "[s.id]"))
 
             v3.VDivider(classes="my-3")
 

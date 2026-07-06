@@ -206,6 +206,32 @@ def _add_series(s: dict, session_id: str, arr, spacing, meta, mesh=None) -> dict
             "meta": meta, "series": s["series"], "all_sides": list(s["sides"].keys())}
 
 
+def _remove_series(s: dict, session_id: str, series_id: str) -> dict:
+    """Drop one series (and its sides) from a session so the user can clear a
+    loaded demo/visit without starting over. Refuses to remove the last series
+    (upload a new scan to replace instead)."""
+    series = s.get("series", [])
+    entry = next((e for e in series if e["id"] == series_id), None)
+    if entry is None:
+        raise HTTPException(400, f"unknown series '{series_id}'")
+    if len(series) <= 1:
+        raise HTTPException(400, "cannot remove the only series — upload a new scan to replace it")
+    for k in entry.get("sides", []):
+        s["sides"].pop(k, None)
+    s.setdefault("series_meta", {}).pop(series_id, None)
+    s["series"] = [e for e in series if e["id"] != series_id]
+    # Any cached compare/analyze results may reference the removed sides — drop them.
+    for c in ("compare_cache", "compare_maps", "group_compare_cache", "analyze_cache"):
+        s.pop(c, None)
+    return {"session_id": session_id, "removed": series_id,
+            "series": s["series"], "all_sides": list(s["sides"].keys())}
+
+
+@router.delete("/session/{sid}/series/{series_id}")
+def remove_series(sid: str, series_id: str) -> dict:
+    return _remove_series(_get_session(sid), sid, series_id)
+
+
 @router.post("/session")
 def create_session(layout: str = "bilateral") -> dict:
     """Create a session from the bundled de-identified demo scan.
