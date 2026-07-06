@@ -52,6 +52,10 @@ export default function ControlPanel({
   canShowBoth,
   modeBView,
   onModeBViewChange,
+  compareMode,
+  onCompareModeChange,
+  groupInfo,
+  groupVisitCount = 0,
   referenceSide,
   targetSide,
   onReferenceSideChange,
@@ -128,6 +132,8 @@ export default function ControlPanel({
   const setCrossSeries = (sideName, refSeriesId, tgtSeriesId) => {
     onReferenceSideChange(keyFor(refSeriesId, sideName) || referenceSide);
     onTargetSideChange(keyFor(tgtSeriesId, sideName) || targetSide);
+    // Same anatomical side across visits — the two surfaces are NOT mirror images.
+    onMirrorChange?.(false);
   };
   const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
@@ -296,8 +302,13 @@ export default function ControlPanel({
                             key={s.id}
                             type="button"
                             className={`roles-within-btn${on ? ' active' : ''}`}
-                            onClick={() => { onReferenceSideChange(l); onTargetSideChange(r); }}
-                            title={`Compare Left vs Right within ${s.name}`}
+                            onClick={() => {
+                              onReferenceSideChange(l);
+                              onTargetSideChange(r);
+                              // Left vs Right of ONE scan is contralateral — mirror it.
+                              onMirrorChange?.(true);
+                            }}
+                            title={`Compare Left vs Right within ${s.name} (mirrored contralateral)`}
                           >
                             {s.name}: L vs R
                           </button>
@@ -411,7 +422,48 @@ export default function ControlPanel({
           </>
         )}
 
-        {showDeviation && (
+        {showDeviation && series.length > 1 && (
+          <>
+            <h2 className="sub-head">Compare</h2>
+            <div className="seg-toggle" role="group" aria-label="Comparison mode">
+              <button
+                className={compareMode !== 'group' ? 'active' : ''}
+                onClick={() => onCompareModeChange('pair')}
+                title="Compare two surfaces (one pair)"
+              >
+                One pair
+              </button>
+              <button
+                className={compareMode === 'group' ? 'active' : ''}
+                onClick={() => onCompareModeChange('group')}
+                title="Overlay ALL visits (same side) and colour one surface by the difference across all of them"
+              >
+                All visits at once
+              </button>
+            </div>
+            {compareMode === 'group' && (
+              <div className="roles-current" style={{ marginTop: '6px' }}>
+                Overlaying <strong>{groupVisitCount} visits</strong> (same side). The{' '}
+                <strong>latest</strong> surface is coloured by the difference; earlier
+                visits are faint ghost shells. Red = excess, green = deficit.
+                {groupInfo?.registrations && (
+                  <div className="group-reg">
+                    {groupInfo.registrations.map((r, i) => (
+                      <span key={i} className={`reg-badge${r.reliable ? '' : ' bad'}`}>
+                        visit {i}: {r.reliable ? 'aligned' : 'low overlap'}
+                        {typeof r.inlier_fraction === 'number'
+                          ? ` (${Math.round(r.inlier_fraction * 100)}%)`
+                          : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {showDeviation && compareMode !== 'group' && (
           <div className="deviation-setup">
             <p className="panel-hint compare-guide">
               <strong>What to compare.</strong>{' '}

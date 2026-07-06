@@ -128,6 +128,19 @@ export function compare(
   return postJSON(`/api/session/${sessionId}/compare`, body);
 }
 
+// POST /api/session/{sid}/compare-group
+//   body: { sides_group:[baseline,...visits], params }
+//   -> { geometry_url, ghost_urls:[...], scalar, scalar_range, colormap, steps,
+//        stats, spread_stats, registrations:[{rms_mm,inlier_fraction,reliable}],
+//        colored_index, n_visits, aggregate, hover_scalars }
+// Compare N same-anatomical-side surfaces across visits AT ONCE into one map.
+export function compareGroup(sessionId, { sidesGroup, params }) {
+  return postJSON(`/api/session/${sessionId}/compare-group`, {
+    sides_group: sidesGroup,
+    params,
+  });
+}
+
 // POST /api/session/{sid}/export -> { files:{fmt:url}, mode, scalar }.
 // mode 'A' exports a single side's thickness map; mode 'B' a deviation map.
 export function exportResult(

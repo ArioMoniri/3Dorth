@@ -22,6 +22,7 @@ import {
   fetchParameters,
   createSession,
   uploadFile,
+  compareGroup,
   analyze,
   compare,
   exportResult,
@@ -155,6 +156,11 @@ export default function App() {
   const [geometry, setGeometry] = useState(null); // {url, scalar}
   const [thicknessResult, setThicknessResult] = useState(null);
   const [deviationResult, setDeviationResult] = useState(null);
+  // Mode B comparison mode: 'pair' (two surfaces) | 'group' (all visits, same side
+  // at once). Mirror-one is 'pair' with mirror on + a within-series L/R pick.
+  const [compareMode, setCompareMode] = useState('pair');
+  const [groupGhosts, setGroupGhosts] = useState([]); // ghost mesh URLs (other visits)
+  const [groupInfo, setGroupInfo] = useState(null);    // {n_visits, registrations, colored_index}
   // The bilateral "Both" view: when side === 'both' we compute BOTH sides and
   // render two meshes together. `secondGeometry` holds the SECOND side's server
   // geometry payload (colored client-side in `secondDisplayGeometry`).
@@ -244,6 +250,10 @@ export default function App() {
     // A new scan invalidates any in-progress measurement.
     setMeasureMode(false);
     setMeasurePoints([]);
+    // Reset the comparison mode + any all-visits ghost overlays.
+    setCompareMode('pair');
+    setGroupGhosts([]);
+    setGroupInfo(null);
     // A new scan invalidates any cached region previews.
     thumbCacheRef.current = new Map();
     setRegionThumbs(null);
@@ -312,6 +322,10 @@ export default function App() {
     return JSON.stringify({
       mode,
       modeBView,
+      compareMode,
+      // In group mode the compute depends on ALL same-side visit keys, not the
+      // single reference/target pair.
+      groupSides: compareMode === 'group' ? groupSidesForCurrent() : null,
       side,
       referenceSide,
       targetSide,
@@ -330,6 +344,7 @@ export default function App() {
     values,
     mode,
     modeBView,
+    compareMode,
     side,
     referenceSide,
     targetSide,
@@ -338,6 +353,7 @@ export default function App() {
     manualTransform,
     regionLabel,
     wholeBone,
+    session?.series,
   ]);
 
   // Is the current view a deviation view?
@@ -478,6 +494,48 @@ export default function App() {
       setDeviationResult(res);
       setSecondGeometry(null); // deviation is a single registered surface
       setGeometryFromDeviation(res);
+      setGroupGhosts([]); // pair mode has no ghost overlays
+      setGroupInfo(null);
+    } catch (e) {
+      if (requestIdRef.current === myId) setComputeError(readableError(e));
+    } finally {
+      if (requestIdRef.current === myId) setComputing(false);
+    }
+  }
+
+  // The same-anatomical-side keys across ALL visits (baseline first), for the
+  // "all visits at once" group comparison — matched by the reference side's name.
+  function groupSidesForCurrent() {
+    const list = session?.series || [];
+    const name = sideNameOf(referenceSide);
+    const keys = [];
+    for (const s of list) {
+      const k = (s.sides || []).find((x) => sideNameOf(x) === name);
+      if (k) keys.push(k);
+    }
+    return keys;
+  }
+
+  async function runCompareGroup() {
+    const sidesGroup = groupSidesForCurrent();
+    if (!session || sidesGroup.length < 2) return;
+    const myId = (requestIdRef.current += 1);
+    setComputing(true);
+    setComputeError(null);
+    try {
+      const params = { ...values };
+      const res = await compareGroup(session.session_id, { sidesGroup, params });
+      if (requestIdRef.current !== myId) return;
+      setDeviationResult(res); // reuse the deviation render path for the coloured surface
+      setSecondGeometry(null);
+      setGeometryFromDeviation(res);
+      setGroupGhosts(res.ghost_urls || []);
+      setGroupInfo({
+        n_visits: res.n_visits,
+        registrations: res.registrations,
+        colored_index: res.colored_index,
+        aggregate: res.aggregate,
+      });
     } catch (e) {
       if (requestIdRef.current === myId) setComputeError(readableError(e));
     } finally {
@@ -572,6 +630,11 @@ export default function App() {
   // (needs a side, non-mesh). Returns true if a compute was actually started.
   function runActiveCompute() {
     if (isDeviationView) {
+      if (compareMode === 'group') {
+        if (!session || groupSidesForCurrent().length < 2) return false;
+        runCompareGroup();
+        return true;
+      }
       if (!session || referenceSide === targetSide) return false;
       runCompare();
       return true;
@@ -1085,6 +1148,21 @@ export default function App() {
           canShowBoth={canShowBoth}
           modeBView={modeBView}
           onModeBViewChange={setModeBView}
+          compareMode={compareMode}
+          onCompareModeChange={(m) => {
+            setCompareMode(m);
+            // Entering "all visits" seeds the green(deficit)→red(excess) map that
+            // reads as a difference; the user can still change it in Coloring.
+            if (m === 'group' && values?.mode_b_colormap === 'blue_white_red') {
+              onParamChange('mode_b_colormap', 'green_white_red');
+            }
+            if (m !== 'group') {
+              setGroupGhosts([]);
+              setGroupInfo(null);
+            }
+          }}
+          groupInfo={groupInfo}
+          groupVisitCount={groupSidesForCurrent().length}
           referenceSide={referenceSide}
           targetSide={targetSide}
           onReferenceSideChange={setReferenceSide}
@@ -1283,6 +1361,7 @@ export default function App() {
             measureMode={measureMode}
             onMeasurePick={onMeasurePick}
             measurePoints={measurePoints}
+            ghosts={compareMode === 'group' && isDeviationView ? groupGhosts : []}
           />
 
           {displayGeometry && (
@@ -1435,7 +1514,12 @@ export default function App() {
                       each point — not a thickness map. */}
                   <div className="dev-key">
                     <div className="dev-key-head">
-                      How <strong>{tgtL}</strong> differs from <strong>{refL}</strong>:
+                      {compareMode === 'group' ? (
+                        <>Coloured surface (latest visit) vs the other{' '}
+                          {Math.max((groupInfo?.n_visits ?? 2) - 1, 1)} visit(s):</>
+                      ) : (
+                        <>How <strong>{tgtL}</strong> differs from <strong>{refL}</strong>:</>
+                      )}
                     </div>
                     <div className="dev-key-row">
                       <span className="dev-sw" style={{ background: ep.high }} />

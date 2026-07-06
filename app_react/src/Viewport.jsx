@@ -344,6 +344,7 @@ export default function Viewport({
   measureMode = false,
   onMeasurePick,
   measurePoints,
+  ghosts,
 }) {
   const containerRef = useRef(null);
   const contextRef = useRef(null);
@@ -1061,6 +1062,51 @@ export default function Viewport({
     }
     ctx.renderWindow?.render();
   }, [marker?.x, marker?.y, marker?.z]);
+
+  // ---- ghost overlays: the OTHER visits in an all-visits comparison --------
+  // Faint grey, non-pickable shells behind the coloured surface, so you can see
+  // all visits "onto each other". Kept as a dedicated actor list so they never
+  // touch the primary mesh's LUT / clip / picking.
+  useEffect(() => {
+    const ctx = contextRef.current;
+    if (!ctx || !ctx.renderer) return undefined;
+    (ctx.ghostActors || []).forEach((a) => {
+      ctx.renderer.removeActor(a);
+      a.delete?.();
+    });
+    ctx.ghostActors = [];
+    const urls = ghosts || [];
+    if (!urls.length) {
+      ctx.renderWindow?.render();
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      for (const url of urls) {
+        try {
+          const buf = await fetchGeometryArrayBuffer(url);
+          if (cancelled) return;
+          const poly = parseVtp(buf);
+          const mp = vtkMapper.newInstance();
+          mp.setScalarVisibility(false);
+          mp.setInputData(poly);
+          const act = vtkActor.newInstance();
+          act.setMapper(mp);
+          act.getProperty().setColor(0.62, 0.62, 0.66);
+          act.getProperty().setOpacity(0.22);
+          act.setPickable(false); // never a pick / measure / isolate target
+          ctx.renderer.addActor(act);
+          ctx.ghostActors.push(act);
+        } catch {
+          /* a ghost failing to load must never break the primary view */
+        }
+      }
+      if (!cancelled) ctx.renderWindow?.render();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ghosts]);
 
   // ---- measure tool: place endpoint spheres + connecting line --------------
   useEffect(() => {

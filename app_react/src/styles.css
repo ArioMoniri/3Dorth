@@ -367,6 +367,18 @@ body {
   border-color: var(--accent-2);
 }
 
+/* Group (all-visits) per-visit registration badges. */
+.group-reg { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.reg-badge {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #e8f0e8;
+  color: #2b6a2b;
+  border: 1px solid #cfe0cf;
+}
+.reg-badge.bad { background: #fdeae0; color: #a15b1e; border-color: #f0d2bd; }
+
 .ctl-label {
   display: block;
   font-size: 13px;
