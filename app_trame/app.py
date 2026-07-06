@@ -324,9 +324,12 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
             and state.tgt_side in vol_sides and state.ref_side != state.tgt_side)
     if not keep:
         state.ref_side, state.tgt_side = ref, tgt
-    # A bare-mesh session cannot do Mode-A thickness (needs a volume wall).
-    if is_mesh_sess and state.mode == "A":
+    # A bare-mesh session cannot do Mode-A thickness (needs a volume wall) — force
+    # the difference view (which also sets mode/b_view via the colour_by handler).
+    if is_mesh_sess and state.colour_by == "thickness":
+        state.colour_by = "difference"
         state.mode = "B"
+        state.b_view = "deviation"
     # A genuinely NEW scan exits the all-visits group mode; adding a series keeps it.
     if not preserve_roles:
         state.compare_group_mode = False
@@ -469,7 +472,8 @@ ctrl.select_region = select_region
 for _c in control_specs():
     state[_c["key"]] = _c["default"]
 
-state.mode = "A"                 # "A" or "B"
+state.mode = "A"                 # "A" or "B" (DERIVED from colour_by; kept internal)
+state.colour_by = "thickness"    # merged control: "thickness" | "difference"
 state.side = "left"              # active side for thickness views
 state.ref_side = "left"          # Mode B reference
 state.tgt_side = "right"         # Mode B target
@@ -2329,13 +2333,14 @@ for _k in _RECOMPUTE_PARAM_KEYS + _RECOMPUTE_STATE_KEYS:
     state.change(_k)(schedule_recompute)
 
 
-@state.change("mode")
-def _on_mode_change(mode, **_k):
-    """Entering Mode B with a comparison available lands directly on the deviation
-    view (parity with React's Mode-B button), so the reference/target compare
-    workflow isn't hidden behind the Thickness sub-toggle."""
-    if mode == "B" and state.compare_available:
-        state.b_view = "deviation"
+@state.change("colour_by")
+def _on_colour_by(colour_by, **_k):
+    """The merged 'Colour by' control drives the internal mode / b_view (and thus the
+    recompute + the registry param filter). Difference -> Mode B deviation;
+    Thickness -> Mode A. Replaces the old Mode A/B toggle + the b_view sub-toggle."""
+    diff = colour_by == "difference"
+    state.mode = "B" if diff else "A"
+    state.b_view = "deviation" if diff else "thickness"
 
 
 for _k in _DISPLAY_ONLY_PARAM_KEYS:
@@ -2801,11 +2806,11 @@ with SinglePageWithDrawerLayout(server) as layout:
 
     with layout.toolbar:
         v3.VSpacer()
-        html.Span("Mode", style="font-size:13px;color:#555;margin-right:8px")
-        with v3.VBtnToggle(v_model=("mode", "A"), density="compact",
+        html.Span("Colour by", style="font-size:13px;color:#555;margin-right:8px")
+        with v3.VBtnToggle(v_model=("colour_by", "thickness"), density="compact",
                            mandatory=True, variant="outlined", divided=True):
-            v3.VBtn("A", value="A", disabled=("is_mesh_session",))
-            v3.VBtn("B", value="B")
+            v3.VBtn("Thickness", value="thickness", disabled=("is_mesh_session",))
+            v3.VBtn("Difference", value="difference")
         v3.VSwitch(
             v_model=("compare_active",), label="Compare (linked cross-sections)",
             density="compact", hide_details=True, color="primary",
@@ -2862,7 +2867,7 @@ with SinglePageWithDrawerLayout(server) as layout:
             # ---- Session: side + Mode B sub-view + Apply ---------------------
             v3.VCardTitle("Session", classes="text-subtitle-1 pb-1")
             v3.VSelect(v_model=("side",), items=("side_thickness_options",),
-                       label="Side (thickness view)", density="compact",
+                       label="Show (Left / Right / Both)", density="compact",
                        hide_details=True, variant="outlined",
                        disabled=("is_mesh_session",))
             html.Div(
@@ -2876,20 +2881,13 @@ with SinglePageWithDrawerLayout(server) as layout:
                 "Mode A is disabled. Use Mode B (comparison / viewing).",
                 v_if="is_mesh_session",
                 style="font-size:11px;color:#b26a00;margin-top:4px;line-height:1.4")
-            # Mode B: thickness / deviation sub-view toggle (Mode-B only).
-            with html.Div(v_if="mode === 'B'", classes="mt-2"):
-                with v3.VBtnToggle(v_model=("b_view", "thickness"),
-                                   density="compact", mandatory=True,
-                                   variant="outlined", divided=True,
-                                   classes="mb-2"):
-                    v3.VBtn("Thickness", value="thickness",
-                            disabled=("is_mesh_session",))
-                    v3.VBtn("Deviation", value="deviation")
+            # (The old Mode-B thickness/deviation sub-toggle is gone — the toolbar
+            #  "Colour by: Thickness | Difference" drives it.)
 
             # Comparison roles — visible whenever a comparison is possible (two
             # volume sides), assignable in Mode A OR B, mirroring React's
             # always-visible "Comparison roles" card.
-            with html.Div(v_if="compare_available", classes="mt-2"):
+            with html.Div(v_if="compare_available && colour_by === 'difference'", classes="mt-2"):
                 v3.VCardSubtitle("Comparison roles (Mode B)", classes="px-0 pb-1")
                 # N-way "all visits at once" toggle (only with 2+ series).
                 with html.Div(v_if="n_series > 1", classes="mb-2"):
