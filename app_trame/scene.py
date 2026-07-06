@@ -141,6 +141,21 @@ def build_deviation_scene(plotter: pv.Plotter, mesh, *, params=None):
     return plotter
 
 
+def build_group_scene(plotter: pv.Plotter, mesh, ghosts=None, *, params=None):
+    """Render the N-way "all visits at once" scene: ONE coloured surface (the
+    aggregate ``deviation_mm`` from ``core.pipeline.compare_series_group``) plus the
+    other visits as faint grey, non-pickable ghost shells behind it."""
+    build_deviation_scene(plotter, mesh, params=params)  # colours the primary + colorbar
+    for g in (ghosts or []):
+        try:
+            if getattr(g, "n_points", 0):
+                plotter.add_mesh(g, color="#9ea0a8", opacity=0.22, smooth_shading=True,
+                                 pickable=False, show_scalar_bar=False, name=None)
+        except Exception:  # noqa: BLE001 — a ghost must never break the primary view
+            pass
+    return plotter
+
+
 # --------------------------------------------------------------------------- #
 # Backward-compatible wrapper for the old precomputed-bundle scene.
 # --------------------------------------------------------------------------- #

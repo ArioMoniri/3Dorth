@@ -54,7 +54,8 @@ from trame.widgets import vuetify3 as v3  # noqa: E402
 import core.parameters as P  # noqa: E402
 import core.viz.slice as mpr  # noqa: E402  (shared slice math — byte-identical to the API)
 from app_trame.controls import control_specs  # noqa: E402
-from app_trame.scene import build_deviation_scene, build_thickness_scene  # noqa: E402
+from app_trame.scene import (  # noqa: E402
+    build_deviation_scene, build_group_scene, build_thickness_scene)
 from core import pipeline  # noqa: E402
 from core.export import export_bundle  # noqa: E402
 from core.ingest import is_mesh  # noqa: E402
@@ -326,6 +327,9 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
     # A bare-mesh session cannot do Mode-A thickness (needs a volume wall).
     if is_mesh_sess and state.mode == "A":
         state.mode = "B"
+    # A genuinely NEW scan exits the all-visits group mode; adding a series keeps it.
+    if not preserve_roles:
+        state.compare_group_mode = False
     _update_dev_labels()  # series-aware deviation legend labels
     state.meta_html = _meta_html()
     # A fresh scan invalidates any in-progress measurement (parity with React).
@@ -491,6 +495,9 @@ state.n_series = 1
 state.add_series_file = None
 # Series that have BOTH a left and a right (offered as "L vs R within scan").
 state.within_series = []
+# N-way "all visits at once" comparison mode + its readout.
+state.compare_group_mode = False
+state.group_msg = ""
 # Deviation legend explanation: series-aware role labels + colormap-matched
 # swatch colours, so the diverging map's meaning (gained vs lost bone) is spelt out.
 state.dev_ref_label = "Left"
@@ -2016,7 +2023,35 @@ def _compute_worker(req_id: int | None = None):
                 ) + _stat_rows("Segmentation",
                                [("region label", str(res["region_label"])),
                                 ("metal fraction", f"{res['metal_fraction']:.4f}")])
-        else:  # Mode B deviation
+        elif state.compare_group_mode and len(SESSION.get("series", [])) >= 2:
+            # N-way "all visits at once" (same anatomical side) -> one colour map.
+            def _bare(k):
+                return k.split("/", 1)[1] if "/" in k else k
+            name = _bare(state.ref_side)
+            group = []
+            for se in SESSION.get("series", []):
+                k = next((x for x in se["sides"] if _bare(x) == name), None)
+                if k and (sides.get(k) or {}).get("arr") is not None:
+                    group.append(sides[k])
+            if len(group) < 2:
+                raise RuntimeError("Need the same side in at least two visits for the "
+                                   "all-visits map.")
+            res = pipeline.compare_series_group(group, params)
+            _LAST_MESH["deviation"] = res["mesh"]
+            build_group_scene(PLOTTER, res["mesh"], res.get("ghosts", []), params=params)
+            st = res["stats"]
+            coloured = "latest" if res["colored_index"] != 0 else "baseline"
+            with state:
+                state.group_msg = (f"All {res['n_visits']} visits · {name} · "
+                                   f"coloured = {coloured} · red=excess / green=deficit")
+            html_out = _meta_html() + _stat_rows(
+                f"All-visits difference — {name} ({res['n_visits']} visits, {res['aggregate']})",
+                [("mean (mm)", f"{st['mean']:.3f}"),
+                 ("max excess (mm)", f"{st['max_positive']:.3f}"),
+                 ("max deficit (mm)", f"{st['max_negative']:.3f}"),
+                 ("coloured surface", coloured)],
+            )
+        else:  # Mode B deviation (one pair)
             ref = sides.get(state.ref_side)
             tgt = sides.get(state.tgt_side)
             if ref is None or tgt is None:
@@ -2254,7 +2289,7 @@ _RECOMPUTE_PARAM_KEYS = [c["key"] for c in control_specs() if c["recompute"]]
 _DISPLAY_ONLY_PARAM_KEYS = [c["key"] for c in control_specs() if not c["recompute"]]
 # Non-registry selectors / knobs that also require a fresh pipeline run.
 _RECOMPUTE_STATE_KEYS = [
-    "side", "mode", "b_view", "ref_side", "tgt_side",
+    "side", "mode", "b_view", "ref_side", "tgt_side", "compare_group_mode",
     "manual_enabled", "manual_tx", "manual_ty", "manual_tz",
     "manual_rx", "manual_ry", "manual_rz",
 ]
@@ -2798,9 +2833,20 @@ with SinglePageWithDrawerLayout(server) as layout:
             # always-visible "Comparison roles" card.
             with html.Div(v_if="compare_available", classes="mt-2"):
                 v3.VCardSubtitle("Comparison roles (Mode B)", classes="px-0 pb-1")
+                # N-way "all visits at once" toggle (only with 2+ series).
+                with html.Div(v_if="n_series > 1", classes="mb-2"):
+                    with v3.VBtnToggle(v_model=("compare_group_mode", False),
+                                       density="compact", mandatory=True,
+                                       variant="outlined", divided=True):
+                        v3.VBtn("One pair", value=False)
+                        v3.VBtn("All visits at once", value=True)
+                    html.Div("📊 {{ group_msg }}",
+                             v_if="compare_group_mode",
+                             style="font-size:11px;color:#1a4fd6;margin-top:4px;line-height:1.4")
                 v3.VSelect(v_model=("ref_side",), items=("side_options",),
                            label="Reference (baseline, deviation = 0)", density="compact",
-                           hide_details=True, variant="outlined", classes="mb-1")
+                           hide_details=True, variant="outlined", classes="mb-1",
+                           disabled=("compare_group_mode",))
                 v3.VSelect(v_model=("tgt_side",), items=("side_options",),
                            label="Target (measured against reference)", density="compact",
                            hide_details=True, variant="outlined", classes="mb-1")
