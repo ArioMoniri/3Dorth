@@ -274,6 +274,11 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
         for s in series
     ]
     state.n_series = len(series)
+    # Series offering an in-scan Left-vs-Right comparison (need both sides present).
+    def _has_lr(entry):
+        bares = {(k.split("/", 1)[1] if "/" in k else k) for k in entry["sides"]}
+        return {"left", "right"} <= bares
+    state.within_series = [{"id": s["id"], "name": s["name"]} for s in series if _has_lr(s)]
     # Keep the active selectors valid for the current session. 'both' is a valid
     # thickness selection on a bilateral volume session.
     valid_sides = names + (["both"] if both_allowed else [])
@@ -286,11 +291,23 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
     def _vol(entry):
         return [k for k in entry["sides"] if k in vol_sides]
 
+    def _bare(k):
+        return k.split("/", 1)[1] if "/" in k else k
+
+    def _pick(entry, name):
+        return next((k for k in _vol(entry) if _bare(k) == name), None)
+
     if len(series) >= 2 and _vol(series[0]) and _vol(series[1]):
-        ref = _vol(series[0])[0]
-        ref_bare = ref.split("/", 1)[1] if "/" in ref else ref
+        # Anchor each visit's LEFT to the others' left (article convention); fall
+        # back to Right, then to whatever side both visits share.
+        side_name = (
+            "left" if (_pick(series[0], "left") and _pick(series[1], "left"))
+            else "right" if (_pick(series[0], "right") and _pick(series[1], "right"))
+            else _bare(_vol(series[0])[0])
+        )
+        ref = _pick(series[0], side_name) or _vol(series[0])[0]
         s1v = _vol(series[1])
-        tgt = next((k for k in s1v if (k.split("/", 1)[1] if "/" in k else k) == ref_bare), s1v[0])
+        tgt = _pick(series[1], side_name) or s1v[0]
     elif s0_bilateral:
         ref, tgt = "left", "right"
     elif len(vol_sides) >= 2:
@@ -472,6 +489,8 @@ state.upload_file = None
 state.series_list = []
 state.n_series = 1
 state.add_series_file = None
+# Series that have BOTH a left and a right (offered as "L vs R within scan").
+state.within_series = []
 # Deviation legend explanation: series-aware role labels + colormap-matched
 # swatch colours, so the diverging map's meaning (gained vs lost bone) is spelt out.
 state.dev_ref_label = "Left"
@@ -2647,6 +2666,27 @@ def swap_ref_tgt(*_a, **_k):
 ctrl.swap_ref_tgt = swap_ref_tgt
 
 
+def set_within_lr(series_id, *_a, **_k):
+    """Compare Left vs Right WITHIN one series (the option alongside the standard
+    same-side-across-visits comparison)."""
+    def _bare(k):
+        return k.split("/", 1)[1] if "/" in k else k
+    with _LOCK:
+        keys = list(SESSION["sides"].keys())
+    left = next((k for k in keys if _series_of(k) == series_id and _bare(k) == "left"), None)
+    right = next((k for k in keys if _series_of(k) == series_id and _bare(k) == "right"), None)
+    if left and right:
+        with state:
+            state.ref_side, state.tgt_side = left, right
+
+
+def _series_of(sideKey):
+    return sideKey.split("/")[0] if "/" in sideKey else "s0"
+
+
+ctrl.set_within_lr = set_within_lr
+
+
 # --------------------------------------------------------------------------- #
 # UI: registry-driven control renderer.
 # --------------------------------------------------------------------------- #
@@ -2775,13 +2815,22 @@ with SinglePageWithDrawerLayout(server) as layout:
                     "+ target outside reference (bone gained) · − inside (lost). "
                     "Swapping flips the sign and colours.",
                     style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
-                # With 2+ series, spell out the cross-series standard.
+                # With 2+ series, spell out the cross-series standard + offer the
+                # in-scan Left-vs-Right option as one-click buttons.
                 html.Div(
-                    "Standard: compare the same side across series "
-                    "(baseline·Left → follow-up·Left). Labels show which scan each "
-                    "side belongs to.",
+                    "Standard: same side across visits "
+                    "(baseline·Left → follow-up·Left) — the default. The selectors "
+                    "above are series-labelled; pick a matching side in each.",
                     v_if="n_series > 1",
                     style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
+                with html.Div(v_if="n_series > 1 && within_series.length", classes="mt-1"):
+                    html.Div("Or — left vs right within one scan:",
+                             style="font-size:11px;color:#666;margin-bottom:2px")
+                    with html.Div(classes="d-flex", style="flex-wrap:wrap;gap:4px"):
+                        v3.VBtn("{{ s.name }}: L vs R",
+                                v_for="s in within_series", key="s.id",
+                                size="x-small", variant="tonal", color="primary",
+                                click=(ctrl.set_within_lr, "[s.id]"))
 
             # ---- Deviation legend key: what the colours MEAN -----------------
             # Shown in the deviation view — the DIFFERENCE between the two anchored

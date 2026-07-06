@@ -221,16 +221,17 @@ export default function App() {
     setSide(sides[0] ?? null);
     // Default comparison roles. With a single series, compare its two sides
     // (left vs right). With 2+ series, the STANDARD is to compare the SAME side
-    // across series (baseline·left → follow-up·left), so default to s0's first
-    // side vs the matching side of the next series.
+    // across series — anchoring each visit's LEFT to the others' left (the
+    // article's convention). Default to Left↔Left across the first two visits,
+    // falling back to Right, then to whatever side both share.
     if (series.length >= 2) {
-      const ref = series[0].sides?.[0] ?? sides[0] ?? null;
-      const refName = ref ? sideNameOf(ref) : null;
-      const tgt =
-        series[1].sides?.find((k) => sideNameOf(k) === refName) ??
-        series[1].sides?.[0] ??
-        sides[1] ??
-        null;
+      const pick = (entry, name) => entry.sides?.find((k) => sideNameOf(k) === name) ?? null;
+      const sideName =
+        (pick(series[0], 'left') && pick(series[1], 'left') && 'left') ||
+        (pick(series[0], 'right') && pick(series[1], 'right') && 'right') ||
+        (series[0].sides?.[0] ? sideNameOf(series[0].sides[0]) : null);
+      const ref = pick(series[0], sideName) ?? series[0].sides?.[0] ?? sides[0] ?? null;
+      const tgt = pick(series[1], sideName) ?? series[1].sides?.[0] ?? sides[1] ?? null;
       setReferenceSide(ref);
       setTargetSide(tgt);
     } else {

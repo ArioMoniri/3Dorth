@@ -112,6 +112,23 @@ export default function ControlPanel({
   const sides = session?.sides ?? [];
   const series = session?.series ?? [];
   const meta = session?.meta ?? {};
+
+  // Side-key helpers for the comparison controls. A side key is a plain side of
+  // the first series ("left") or a namespaced side of a later series ("s1/left").
+  const sideNameOf = (k) => (k && k.includes('/') ? k.split('/').slice(1).join('/') : k);
+  const seriesIdOf = (k) => (k && k.includes('/') ? k.split('/')[0] : 's0');
+  const keyFor = (seriesId, sideName) => {
+    const entry = series.find((s) => s.id === seriesId);
+    return entry ? entry.sides.find((k) => sideNameOf(k) === sideName) ?? null : null;
+  };
+  const sideNamesIn = (seriesId) =>
+    (series.find((s) => s.id === seriesId)?.sides || []).map(sideNameOf);
+  // Set BOTH roles to the same anatomical side across two chosen visits (the
+  // standard cross-series comparison: baseline·Left → follow-up·Left).
+  const setCrossSeries = (sideName, refSeriesId, tgtSeriesId) => {
+    onReferenceSideChange(keyFor(refSeriesId, sideName) || referenceSide);
+    onTargetSideChange(keyFor(tgtSeriesId, sideName) || targetSide);
+  };
   const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
   const [showHelp, setShowHelp] = useState(true);
@@ -211,36 +228,107 @@ export default function ControlPanel({
         {/* Comparison roles — visible right after upload, assignable any time. */}
         {!isMesh && sides.length >= 2 && (
           <div className="roles-card">
-            <div className="roles-card-title">Comparison roles (Mode B)</div>
-            <p className="panel-hint roles-hint">
-              Mode B measures the <b title="the surface being assessed">target</b> against
-              the <b title="the baseline surface, deviation = 0 mm on it">reference</b>{' '}
-              baseline — the coloured map is the <b>difference between the two surfaces</b>:{' '}
-              <b>+ = target outside reference</b> (bone gained),{' '}
-              <b>− = inside</b> (bone lost). Swapping the two flips the sign and colours.
-            </p>
-            <label className="ctl ctl-enum">
-              <span className="ctl-label">Reference (baseline)</span>
-              <select
-                value={referenceSide ?? ''}
-                onChange={(e) => onReferenceSideChange(e.target.value)}
-              >
-                {sides.map((s) => (
-                  <option key={s} value={s}>{prettySide(s, series)}</option>
-                ))}
-              </select>
-            </label>
-            <label className="ctl ctl-enum">
-              <span className="ctl-label">Target (measured)</span>
-              <select
-                value={targetSide ?? ''}
-                onChange={(e) => onTargetSideChange(e.target.value)}
-              >
-                {sides.map((s) => (
-                  <option key={s} value={s}>{prettySide(s, series)}</option>
-                ))}
-              </select>
-            </label>
+            <div className="roles-card-title">What to compare (Mode B)</div>
+
+            {series.length > 1 ? (
+              (() => {
+                const refSideName = sideNameOf(referenceSide);
+                const refSeriesId = seriesIdOf(referenceSide);
+                const tgtSeriesId = seriesIdOf(targetSide);
+                // Sides available in BOTH chosen visits (so same-side is possible).
+                const both = sideNamesIn(refSeriesId).filter((n) =>
+                  sideNamesIn(tgtSeriesId).includes(n),
+                );
+                const ordered = ['left', 'right', 'full']
+                  .filter((n) => both.includes(n))
+                  .concat(both.filter((n) => !['left', 'right', 'full'].includes(n)));
+                const activeSide = ordered.includes(refSideName) ? refSideName : (ordered[0] || 'left');
+                return (
+                  <>
+                    <div className="roles-sub">
+                      Standard — <b>same side across visits</b> (the article's anchoring)
+                    </div>
+                    <label className="ctl ctl-enum">
+                      <span className="ctl-label">Side to compare</span>
+                      <select
+                        value={activeSide}
+                        onChange={(e) => setCrossSeries(e.target.value, refSeriesId, tgtSeriesId)}
+                      >
+                        {ordered.map((n) => (
+                          <option key={n} value={n}>{cap(n)} ↔ {cap(n)}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="roles-visit-row">
+                      <label className="ctl ctl-enum">
+                        <span className="ctl-label">Reference visit</span>
+                        <select
+                          value={refSeriesId}
+                          onChange={(e) => setCrossSeries(activeSide, e.target.value, tgtSeriesId)}
+                        >
+                          {series.map((s) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="ctl ctl-enum">
+                        <span className="ctl-label">Target visit</span>
+                        <select
+                          value={tgtSeriesId}
+                          onChange={(e) => setCrossSeries(activeSide, refSeriesId, e.target.value)}
+                        >
+                          {series.map((s) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="roles-sub">Or — <b>left vs right within one scan</b></div>
+                    <div className="roles-within-row">
+                      {series.map((s) => {
+                        const l = s.sides.find((k) => sideNameOf(k) === 'left');
+                        const r = s.sides.find((k) => sideNameOf(k) === 'right');
+                        if (!l || !r) return null;
+                        const on = referenceSide === l && targetSide === r;
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            className={`roles-within-btn${on ? ' active' : ''}`}
+                            onClick={() => { onReferenceSideChange(l); onTargetSideChange(r); }}
+                            title={`Compare Left vs Right within ${s.name}`}
+                          >
+                            {s.name}: L vs R
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()
+            ) : (
+              <>
+                <p className="panel-hint roles-hint">
+                  Comparing <b>Left vs Right</b> of this one scan. To compare the{' '}
+                  <b>same side across visits</b> (before / after), use{' '}
+                  <b>＋ Add series</b> above to load a follow-up.
+                </p>
+                <label className="ctl ctl-enum">
+                  <span className="ctl-label">Reference (baseline)</span>
+                  <select value={referenceSide ?? ''} onChange={(e) => onReferenceSideChange(e.target.value)}>
+                    {sides.map((s) => (<option key={s} value={s}>{prettySide(s, series)}</option>))}
+                  </select>
+                </label>
+                <label className="ctl ctl-enum">
+                  <span className="ctl-label">Target (measured)</span>
+                  <select value={targetSide ?? ''} onChange={(e) => onTargetSideChange(e.target.value)}>
+                    {sides.map((s) => (<option key={s} value={s}>{prettySide(s, series)}</option>))}
+                  </select>
+                </label>
+              </>
+            )}
+
             <button
               type="button"
               className="swap-sides-btn"
@@ -251,18 +339,10 @@ export default function ControlPanel({
               ⇄ Swap reference / target
             </button>
             <div className="roles-current">
-              Using: <strong>Reference = {prettySide(referenceSide, series)}</strong> ·{' '}
-              <strong>Target = {prettySide(targetSide, series)}</strong>
+              Comparing: <strong>{prettySide(targetSide, series)}</strong> against{' '}
+              <strong>{prettySide(referenceSide, series)}</strong> (baseline)
               {series.length <= 1 && meta.series ? ` · ${meta.series}` : ''}
             </div>
-            {series.length > 1 && (
-              <p className="panel-hint roles-hint">
-                Standard: compare the <b>same side across series</b> (e.g.{' '}
-                baseline&nbsp;·&nbsp;Left → follow-up&nbsp;·&nbsp;Left). You can also pick
-                Left vs Right <em>within</em> one series — the labels above always show
-                which scan each side belongs to.
-              </p>
-            )}
           </div>
         )}
       </section>
@@ -334,52 +414,22 @@ export default function ControlPanel({
         {showDeviation && (
           <div className="deviation-setup">
             <p className="panel-hint compare-guide">
-              <strong>What to compare.</strong> Deviation compares two bone surfaces of
-              the <em>same</em> anatomy — e.g. an operated humerus vs the contralateral
-              side. Load a <em>bilateral</em> CT (one scan containing both sides); Mode&nbsp;B
-              then aligns and compares Left vs Right. The{' '}
+              <strong>What to compare.</strong>{' '}
+              {series.length > 1
+                ? 'The standard is the SAME side across visits (e.g. baseline·Left → follow-up·Left). '
+                : 'With one scan, Left is compared against Right. '}
+              The{' '}
               <b title="Baseline surface. Deviation is signed relative to this one (0 mm).">reference</b>{' '}
               is the baseline; the{' '}
               <b title="Surface measured against the reference. + = target sits outside the reference (bone gained); − = inside (lost).">target</b>{' '}
-              is measured against it, so <b>swapping them flips the sign and the
-              red/blue colours</b>.
+              is measured against it. Set the pair in the{' '}
+              <b>“What to compare”</b> card in the Scan panel above; swapping flips the
+              sign and colours.
             </p>
-            <label className="ctl ctl-enum">
-              <span
-                className="ctl-label"
-                title="Baseline surface — deviation is signed relative to this one (0 mm)"
-              >
-                Reference side
-              </span>
-              <select
-                value={referenceSide}
-                onChange={(e) => onReferenceSideChange(e.target.value)}
-              >
-                {sides.map((s) => (
-                  <option key={s} value={s}>
-                    {prettySide(s, series)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="ctl ctl-enum">
-              <span
-                className="ctl-label"
-                title="Surface measured against the reference; + = outside the reference (bone gained)"
-              >
-                Target side
-              </span>
-              <select
-                value={targetSide}
-                onChange={(e) => onTargetSideChange(e.target.value)}
-              >
-                {sides.map((s) => (
-                  <option key={s} value={s}>
-                    {prettySide(s, series)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="roles-current">
+              Comparing: <strong>{prettySide(targetSide, series)}</strong> against{' '}
+              <strong>{prettySide(referenceSide, series)}</strong> (baseline)
+            </div>
             <button
               type="button"
               className="swap-sides-btn"
