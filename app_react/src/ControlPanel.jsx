@@ -27,6 +27,17 @@ function cap(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+// "Show" filter option labels / tooltips.
+const SHOW_LABELS = {
+  left: 'Left', right: 'Right', bilateral: 'Bilateral', region: 'Region', auto: 'Whole scan',
+};
+const SHOW_TITLES = {
+  left: 'Show the Left side', right: 'Show the Right side',
+  bilateral: 'Show Left and Right together',
+  region: 'Colour just one connected region (thickness only)',
+  auto: 'Single-sided / mesh scan — the whole surface',
+};
+
 // Label a side key. Later-series sides are namespaced ("s1/left"); when a
 // `series` list is supplied we prefix the series name so the user always sees
 // WHICH scan a side belongs to (e.g. "follow-up · Left").
@@ -55,6 +66,10 @@ export default function ControlPanel({
   side,
   onSideChange,
   canShowBoth,
+  colourBy,
+  showFilter,
+  showOptions,
+  onShowFilterChange,
   modeBView,
   onModeBViewChange,
   compareMode,
@@ -252,7 +267,7 @@ export default function ControlPanel({
         )}
 
         {/* Comparison roles — visible right after upload, assignable any time. */}
-        {!isMesh && sides.length >= 2 && (
+        {!isMesh && sides.length >= 2 && colourBy === 'difference' && (
           <div className="roles-card">
             <div className="roles-card-title">What to compare (Mode B)</div>
 
@@ -380,67 +395,33 @@ export default function ControlPanel({
 
       {/* ---- side & mode --------------------------------------------------- */}
       <section className="panel-section">
-        <h2>{isSingleSided ? 'Scan' : 'Side'}</h2>
-        <div className="seg-toggle" role="group" aria-label="Scan side">
-          {sides.map((s) => (
+        <h2>Show</h2>
+        <div className="seg-toggle" role="group" aria-label="Show">
+          {(showOptions || []).map((f) => (
             <button
-              key={s}
-              className={side === s ? 'active' : ''}
-              onClick={() => onSideChange(s)}
+              key={f}
+              className={showFilter === f ? 'active' : ''}
+              onClick={() => onShowFilterChange(f)}
+              title={SHOW_TITLES[f]}
             >
-              {prettySide(s, series)}
+              {SHOW_LABELS[f] || cap(f)}
             </button>
           ))}
-          {/* Bilateral scans get a "Both" option that renders left + right
-              together (each coloured by its own thickness). Only shown in the
-              thickness view (Mode A or Mode-B thickness) — deviation compares a
-              single registered surface, so Both is hidden there. */}
-          {canShowBoth && !showDeviation && (
-            <button
-              className={side === 'both' ? 'active' : ''}
-              onClick={() => onSideChange('both')}
-              title="Show LEFT and RIGHT together, each coloured by its own cortical thickness"
-            >
-              Both
-            </button>
-          )}
         </div>
-        {side === 'both' && (
-          <p className="panel-hint">
-            Bilateral view: left and right are rendered together, each coloured
-            by its own cortical thickness. The stats, legend and figures below
-            describe the <strong>left</strong> side; hover either bone to read
-            its thickness. Pick a single side to isolate / clip / pick regions.
-          </p>
-        )}
+        <p className="panel-hint" style={{ marginTop: '4px' }}>
+          {colourBy === 'difference'
+            ? showFilter === 'bilateral'
+              ? 'Left↔Left and Right↔Right differences shown together on one shared scale.'
+              : 'Shows the difference for one anatomical side (the anchored visit pair).'
+            : showFilter === 'bilateral'
+              ? 'Left and Right rendered together, each by its own thickness. Pick a single side to isolate / clip / pick regions.'
+              : showFilter === 'region'
+                ? 'Pick a connected region below to colour just that structure.'
+                : 'One surface, coloured by its cortical wall thickness.'}
+        </p>
 
-        {mode === 'B' && !isMesh && (
-          <>
-            <h2 className="sub-head">Mode B view</h2>
-            <div className="seg-toggle" role="group" aria-label="Mode B view">
-              <button
-                className={modeBView === 'thickness' ? 'active' : ''}
-                onClick={() => onModeBViewChange('thickness')}
-                title="Colour each scan by its OWN cortical thickness (not a comparison)"
-              >
-                Each scan's thickness
-              </button>
-              <button
-                className={modeBView === 'deviation' ? 'active' : ''}
-                onClick={() => onModeBViewChange('deviation')}
-                title="Colour by the DIFFERENCE between the two anchored surfaces (mm) — this is the comparison"
-              >
-                Difference between scans
-              </button>
-            </div>
-            <p className="panel-hint" style={{ marginTop: '4px' }}>
-              <strong>Difference between scans</strong> is the comparison: red/blue = how far
-              the target surface sits outside/inside the reference (mm).{' '}
-              <strong>Each scan's thickness</strong> just colours one bone by its own wall
-              thickness — not a comparison.
-            </p>
-          </>
-        )}
+        {/* The old "Mode B view" thickness/deviation sub-toggle is gone — the
+            toolbar "Colour by: Thickness | Difference" now drives it directly. */}
 
         {showDeviation && series.length > 1 && (
           <>

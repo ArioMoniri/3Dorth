@@ -59,8 +59,16 @@ export default function App() {
   const [allControls, setAllControls] = useState([]); // full registry (all modes)
   const [defaults, setDefaults] = useState({});
   const [values, setValues] = useState({});
-  const [mode, setMode] = useState('A');
-  const [modeBView, setModeBView] = useState('thickness'); // 'thickness' | 'deviation'
+  // Merged "Colour by" control (replaces the old Mode A/B toggle + the Mode-B
+  // thickness/deviation sub-toggle). `mode` / `modeBView` are now DERIVED from it,
+  // so all downstream code (and the registry param filter) is unchanged.
+  const [colourBy, setColourBy] = useState('thickness'); // 'thickness' | 'difference'
+  const mode = colourBy === 'difference' ? 'B' : 'A';
+  const modeBView = colourBy === 'difference' ? 'deviation' : 'thickness';
+  // "Show" filter — a VIEW INTENT that resolves to the concrete `side` (thickness)
+  // or reference/target pair (difference). 'auto' = the session's only/first side
+  // (single-sided or mesh). Never sent to the API.
+  const [showFilter, setShowFilter] = useState('auto');
   const [error, setError] = useState(null);
 
   // Side selection + deviation reference/target.
@@ -224,11 +232,53 @@ export default function App() {
     (session?.sides || []).includes('left') &&
     (session?.sides || []).includes('right');
 
+  // ---- "Show" filter options + resolution -----------------------------------
+  const bareSideNames = new Set((session?.sides || []).map(sideNameOf));
+  const hasLR = bareSideNames.has('left') && bareSideNames.has('right');
+  // The options offered for the current session + colour-by mode.
+  const showOptions = isMesh
+    ? ['auto']
+    : hasLR
+      ? colourBy === 'thickness'
+        ? ['left', 'right', 'bilateral', 'region']
+        : ['left', 'right', 'bilateral']
+      : ['auto', ...(colourBy === 'thickness' ? ['region'] : [])];
+  // The side key (in the series that owns `anchorKey`) whose bare name is `name`.
+  function sideKeyInSeriesOf(anchorKey, name) {
+    const sid = seriesIdOf(anchorKey);
+    const entry = (session?.series || []).find((s) => s.id === sid);
+    return entry?.sides.find((k) => sideNameOf(k) === name) ?? null;
+  }
+  // Bilateral DIFFERENCE is only meaningful when a left AND right pair both resolve.
+  const isBilateralDiff = colourBy === 'difference' && showFilter === 'bilateral' && hasLR;
+
+  function onShowFilterChange(f) {
+    setShowFilter(f);
+    if (colourBy === 'thickness') {
+      if (f === 'bilateral') setSide('both');
+      else if (f === 'left' || f === 'right') setSide(f);
+      else if (f === 'auto') setSide((session?.sides || [])[0] ?? null);
+      // 'region' keeps the current single side; the Region picker drives regionLabel
+      else if (f === 'region' && side === 'both') setSide('left');
+    } else if (f === 'left' || f === 'right') {
+      // difference: re-point BOTH roles onto the chosen anatomical side, keeping
+      // each role's own series (visit).
+      const ref = sideKeyInSeriesOf(referenceSide, f) ?? referenceSide;
+      const tgt = sideKeyInSeriesOf(targetSide, f) ?? targetSide;
+      setReferenceSide(ref);
+      setTargetSide(tgt);
+    }
+    // difference + bilateral is handled by the bilateral compute (runCompareBilateral)
+  }
+
   function applySession(sess) {
     setSession(sess);
     const sides = sess.sides || [];
     const series = sess.series || [];
     setSide(sides[0] ?? null);
+    // Default the Show filter: a bilateral scan starts on Left, otherwise Auto.
+    const lr = new Set(sides.map(sideNameOf));
+    setShowFilter(lr.has('left') && lr.has('right') ? 'left' : 'auto');
     // Default comparison roles. With a single series, compare its two sides
     // (left vs right). With 2+ series, the STANDARD is to compare the SAME side
     // across series — anchoring each visit's LEFT to the others' left (the
@@ -263,10 +313,11 @@ export default function App() {
     setRegionThumbs(null);
     setRegionThumbsLoading(false);
     setRegionThumbsError(null);
-    // A mesh session can't produce a thickness map; force Mode B (deviation).
+    // A mesh session can't produce a thickness map; force the difference view.
     if (sess.is_mesh || sess.sides?.[0] === 'mesh') {
-      setMode('B');
-      setModeBView('deviation');
+      setColourBy('difference');
+    } else {
+      setColourBy('thickness');
     }
     // A fresh scan invalidates prior geometry/results.
     setGeometry(null);
@@ -324,8 +375,9 @@ export default function App() {
       relevant[k] = values[k];
     });
     return JSON.stringify({
-      mode,
-      modeBView,
+      colourBy,
+      showFilter,
+      isBilateralDiff,
       compareMode,
       // In group mode the compute depends on ALL same-side visit keys, not the
       // single reference/target pair.
@@ -346,8 +398,9 @@ export default function App() {
   }, [
     recomputeKeys,
     values,
-    mode,
-    modeBView,
+    colourBy,
+    showFilter,
+    isBilateralDiff,
     compareMode,
     side,
     referenceSide,
@@ -547,6 +600,44 @@ export default function App() {
     }
   }
 
+  // Bilateral DIFFERENCE: compute the Left↔Left and Right↔Right differences of the
+  // current reference/target visits together (two /compare calls, shared LUT).
+  async function runCompareBilateral() {
+    const L = {
+      ref: sideKeyInSeriesOf(referenceSide, 'left'),
+      tgt: sideKeyInSeriesOf(targetSide, 'left'),
+    };
+    const R = {
+      ref: sideKeyInSeriesOf(referenceSide, 'right'),
+      tgt: sideKeyInSeriesOf(targetSide, 'right'),
+    };
+    if (!L.ref || !L.tgt || !R.ref || !R.tgt) {
+      setComputeError('Bilateral difference needs a Left and a Right in both visits.');
+      return;
+    }
+    const myId = (requestIdRef.current += 1);
+    setComputing(true);
+    setComputeError(null);
+    try {
+      const params = { ...values };
+      const sid = session.session_id;
+      const [devL, devR] = await Promise.all([
+        compare(sid, { referenceSide: L.ref, targetSide: L.tgt, params, manualTransform }),
+        compare(sid, { referenceSide: R.ref, targetSide: R.tgt, params, manualTransform }),
+      ]);
+      if (requestIdRef.current !== myId) return;
+      setDeviationResult(devL); // the LEFT pair drives stats/legend
+      setGeometryFromDeviation(devL);
+      setSecondGeometry({ url: devR.geometry_url, scalar: devR.scalar }); // RIGHT = 2nd surface
+      setGroupGhosts([]);
+      setGroupInfo(null);
+    } catch (e) {
+      if (requestIdRef.current === myId) setComputeError(readableError(e));
+    } finally {
+      if (requestIdRef.current === myId) setComputing(false);
+    }
+  }
+
   async function onRemoveSeries(seriesId) {
     if (!session?.session_id) return;
     try {
@@ -655,6 +746,11 @@ export default function App() {
   // (needs a side, non-mesh). Returns true if a compute was actually started.
   function runActiveCompute() {
     if (isDeviationView) {
+      if (isBilateralDiff) {
+        if (!session) return false;
+        runCompareBilateral();
+        return true;
+      }
       if (compareMode === 'group') {
         if (!session || groupSidesForCurrent().length < 2) return false;
         runCompareGroup();
@@ -720,7 +816,7 @@ export default function App() {
         const refName = referenceSide ? sideNameOf(referenceSide) : 'left';
         const match = added?.sides?.find((k) => sideNameOf(k) === refName) || added?.sides?.[0];
         if (match) setTargetSide(match);
-        if (mode === 'B') setModeBView('deviation');
+        // colourBy already fully determines the deviation view — nothing to flip.
       } else {
         const sess = await uploadFile(file);
         applySession(sess);
@@ -1080,7 +1176,22 @@ export default function App() {
   // sharing the exact display params (colormap / range / steps / reverse) as the
   // primary so both sides read on one legend. Null unless the Both view is live.
   const secondDisplayGeometry = useMemo(() => {
-    if (!secondGeometry || isDeviationView) return null;
+    if (!secondGeometry) return null;
+    if (isDeviationView) {
+      // Bilateral DIFFERENCE: the second (right) surface shares the SAME diverging
+      // LUT as the primary (left), so one scale reads across both.
+      const center = Number(values.mode_b_center ?? 0);
+      const abs = Number(values.mode_b_range_abs ?? 5);
+      return {
+        url: secondGeometry.url,
+        scalar: secondGeometry.scalar,
+        rangeMin: center - abs,
+        rangeMax: center + abs,
+        steps: Number(values.mode_b_colorbar_steps ?? 11),
+        colormap: values.mode_b_colormap ?? 'blue_white_red',
+        reverse: false,
+      };
+    }
     return {
       url: secondGeometry.url,
       scalar: secondGeometry.scalar,
@@ -1098,6 +1209,10 @@ export default function App() {
     values.mode_a_colorbar_steps,
     values.mode_a_colormap,
     values.mode_a_colormap_reverse,
+    values.mode_b_center,
+    values.mode_b_range_abs,
+    values.mode_b_colorbar_steps,
+    values.mode_b_colormap,
   ]);
 
   if (error) {
@@ -1135,23 +1250,21 @@ export default function App() {
             {session.meta?.series}
           </span>
           {!isMesh && (
-            <div className="mode-toggle" role="group" aria-label="Analysis mode">
-              {['A', 'B'].map((m) => (
-                <button
-                  key={m}
-                  className={mode === m ? 'active' : ''}
-                  onClick={() => {
-                    setMode(m);
-                    // Mode B IS the comparison mode — land straight on the
-                    // deviation sub-view (reference/target + swap + red/green)
-                    // when the scan can be compared, instead of hiding it behind
-                    // the "Per-side thickness" sub-toggle.
-                    if (m === 'B' && canCompareSides) setModeBView('deviation');
-                  }}
-                >
-                  Mode {m}
-                </button>
-              ))}
+            <div className="mode-toggle" role="group" aria-label="Colour by">
+              <button
+                className={colourBy === 'thickness' ? 'active' : ''}
+                onClick={() => setColourBy('thickness')}
+                title="Colour each surface by its own cortical wall thickness (mm)"
+              >
+                Thickness
+              </button>
+              <button
+                className={colourBy === 'difference' ? 'active' : ''}
+                onClick={() => setColourBy('difference')}
+                title="Colour by the difference between two anchored surfaces (mm) — the comparison"
+              >
+                Difference
+              </button>
             </div>
           )}
           <ShareSwitch config={config} />
@@ -1171,8 +1284,11 @@ export default function App() {
           side={side}
           onSideChange={setSide}
           canShowBoth={canShowBoth}
+          colourBy={colourBy}
+          showFilter={showFilter}
+          showOptions={showOptions}
+          onShowFilterChange={onShowFilterChange}
           modeBView={modeBView}
-          onModeBViewChange={setModeBView}
           compareMode={compareMode}
           onCompareModeChange={(m) => {
             setCompareMode(m);
