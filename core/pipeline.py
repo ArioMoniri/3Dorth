@@ -437,6 +437,95 @@ def compare_sides(ref, tgt, params, *, manual_transform=None) -> dict:
     }
 
 
+def compare_series_group(sides_list, params, *, manual_transforms=None) -> dict:
+    """Compare N SAME-anatomical-side surfaces across visits at once (e.g. Left from
+    baseline, follow-up, visit-3) into a SINGLE colour map.
+
+    Star registration: every visit is registered to the BASELINE (``sides_list[0]``)
+    frame — never chained — so registration error does not accumulate. ONE surface
+    carries the colour (``params.nway_colored``: 'latest' [default] or 'baseline');
+    the others are returned as ghost shells for overlay. The coloured scalar is a
+    per-vertex AGGREGATE of the signed distances to the other visits
+    (``params.nway_aggregate``):
+      * ``baseline_to_latest`` (default): net change vs the opposite end (preserves
+        direction — a mean would cancel grow-then-shrink to a false zero);
+      * ``mean_signed``: average signed change across the other visits;
+      * ``max_abs_signed``: the largest-magnitude signed change at each point.
+    A per-vertex ``spread_mm`` (SD across visits) is always carried alongside.
+
+    Single-subject DESCRIPTIVE geometry — no progression/rate/p-value is implied.
+    """
+    try:
+        from core.deviation import deviation_stats, signed_distance
+        from core.registration import apply_transform, register
+    except ImportError as e:  # noqa: BLE001
+        raise NotImplementedError(f"Mode B modules not available yet: {e}")
+
+    if len(sides_list) < 2:
+        raise ValueError("group comparison needs at least two visits")
+    for sd in sides_list:
+        if sd.get("arr") is None:
+            raise ValueError("group comparison needs volume sides (a bare mesh has no wall)")
+
+    meshes = [analyze_thickness(sd["arr"], sd["spacing"], params,
+                                offset_xyz=sd["offset_xyz"])["mesh"] for sd in sides_list]
+    baseline = meshes[0]
+    mans = list(manual_transforms or [])
+
+    # Star registration: every follower -> baseline frame (baseline stays fixed).
+    aligned = [baseline]
+    regs = [{"rms": 0.0, "inlier_fraction": 1.0}]
+    for i in range(1, len(meshes)):
+        reg = register(meshes[i], baseline, voxel_size=params.reg_voxel_size,
+                       icp_iters=params.reg_icp_iters)
+        man = mans[i] if i < len(mans) else None
+        T = _compose_transforms(reg.transform, man)
+        aligned.append(apply_transform(meshes[i], T))
+        regs.append({"rms": float(reg.rms), "inlier_fraction": float(reg.inlier_fraction)})
+
+    # Which surface carries the colour, and which are "the others".
+    colored_idx = (len(aligned) - 1) if getattr(params, "nway_colored", "latest") == "latest" else 0
+    colored = aligned[colored_idx]
+    other_idx = [i for i in range(len(aligned)) if i != colored_idx]
+
+    # signed_distance(target, reference): the FIRST arg (the coloured surface) gets
+    # the per-vertex scalar. + = coloured surface OUTSIDE that visit = excess/gain.
+    conv = params.signed_distance_sign
+    devs = {i: np.asarray(signed_distance(colored, aligned[i], convention=conv), dtype=float)
+            for i in other_idx}
+
+    agg = getattr(params, "nway_aggregate", "baseline_to_latest")
+    if agg == "mean_signed":
+        primary = np.mean(np.stack([devs[i] for i in other_idx]), axis=0)
+    elif agg == "max_abs_signed":
+        stack = np.stack([devs[i] for i in other_idx])
+        pick = np.argmax(np.abs(stack), axis=0)
+        primary = np.take_along_axis(stack, pick[None], axis=0)[0]
+    else:  # baseline_to_latest — net change vs the opposite end
+        opposite = 0 if colored_idx != 0 else (len(aligned) - 1)
+        primary = devs[opposite]
+    spread = (np.std(np.stack([devs[i] for i in other_idx]), axis=0)
+              if len(other_idx) >= 2 else np.zeros(colored.n_points, dtype=float))
+
+    colored["deviation_mm"] = primary
+    colored["spread_mm"] = spread
+    colored["ref_thickness_mm"] = np.asarray(
+        colored.point_data.get("thickness_mm", np.full(colored.n_points, np.nan)), dtype=float)
+
+    return {
+        "mesh": colored,
+        "ghosts": [aligned[i] for i in other_idx],
+        "scalar": "deviation_mm",
+        "stats": deviation_stats(primary).model_dump(),
+        "spread_stats": deviation_stats(spread).model_dump(),
+        "registrations": regs,
+        "colored_index": colored_idx,
+        "n_visits": len(aligned),
+        "aggregate": agg,
+        "hover_scalars": ["deviation_mm", "spread_mm", "ref_thickness_mm"],
+    }
+
+
 def compare_registration(ref, tgt, params, *, manual_transform=None) -> dict:
     """Register ``tgt`` onto ``ref`` and return world-space point maps between the
     two volumes (Phase IV: linked cross-sections).

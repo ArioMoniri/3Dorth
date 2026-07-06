@@ -84,6 +84,14 @@ class CompareReq(BaseModel):
     manual_transform: list[list[float]] | None = None
 
 
+class CompareGroupReq(BaseModel):
+    # Same-anatomical-side keys across visits, baseline FIRST (e.g.
+    # ["left", "s1/left", "s2/left"]). Compared "all at once" into one colour map.
+    sides_group: list[str]
+    params: dict = {}
+    manual_transforms: list[list[list[float]] | None] | None = None
+
+
 class ExportReq(BaseModel):
     mode: str = "A"  # 'A' thickness | 'B' deviation
     side: str | None = None
@@ -696,6 +704,70 @@ def compare(sid: str, req: CompareReq) -> dict:
     }
     cache[key] = {"response": response, "mesh": res["mesh"], "scalar": res["scalar"], "clim": clim}
     while len(cache) > 6:            # bound RAM: a handful of recent results per session
+        cache.popitem(last=False)
+    return response
+
+
+@router.post("/session/{sid}/compare-group")
+def compare_group(sid: str, req: CompareGroupReq) -> dict:
+    """Compare N same-side surfaces across visits at once -> ONE colour map + ghost
+    shells (see core.pipeline.compare_series_group). Additive; /compare is untouched."""
+    s = _get_session(sid)
+    if len(req.sides_group) < 2:
+        raise HTTPException(400, "group comparison needs at least two visits")
+    sides_list = []
+    for name in req.sides_group:
+        sd = s["sides"].get(name)
+        if not sd:
+            raise HTTPException(400, f"unknown side '{name}'")
+        if sd.get("arr") is None:
+            raise HTTPException(400, "group comparison needs volume sides (not bare meshes)")
+        sides_list.append(sd)
+    params = _params(req.params)
+    key = hashlib.sha256(
+        f"grp|{'|'.join(req.sides_group)}|{json.dumps(req.params, sort_keys=True)}"
+        f"|{req.manual_transforms}".encode()
+    ).hexdigest()[:16]
+    cache = s.setdefault("group_compare_cache", OrderedDict())
+    hit = cache.get(key)
+    if hit is not None:
+        cache.move_to_end(key)
+        _stash_ar_mesh(s, hit["mesh"], hit["scalar"], hit["clim"], params.mode_b_colormap)
+        return hit["response"]
+    try:
+        with R.COMPUTE_SEMAPHORE:
+            res = pipeline.compare_series_group(sides_list, params,
+                                                manual_transforms=req.manual_transforms)
+    except NotImplementedError as e:
+        raise HTTPException(501, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(422, f"group comparison failed: {e}") from e
+    clim = (params.mode_b_center - params.mode_b_range_abs,
+            params.mode_b_center + params.mode_b_range_abs)
+    _stash_ar_mesh(s, res["mesh"], res["scalar"], clim, params.mode_b_colormap)
+    ghost_urls = [_save_mesh(g, f"{key}_ghost{i}") for i, g in enumerate(res.get("ghosts", []))]
+    regs = [{"rms_mm": round(r["rms"], 3), "inlier_fraction": round(r["inlier_fraction"], 3),
+             "reliable": bool(r["inlier_fraction"] >= _MIN_RELIABLE_INLIER)}
+            for r in res["registrations"]]
+    response = {
+        "geometry_url": _save_mesh(res["mesh"], key),
+        "ghost_urls": ghost_urls,
+        "scalar": res["scalar"],
+        "scalar_range": [clim[0], clim[1]],
+        "colormap": params.mode_b_colormap,
+        "steps": params.mode_b_colorbar_steps,
+        "stats": res["stats"],
+        "spread_stats": res["spread_stats"],
+        "registrations": regs,
+        "colored_index": res["colored_index"],
+        "n_visits": res["n_visits"],
+        "aggregate": res["aggregate"],
+        "hover_scalars": res.get("hover_scalars", [res["scalar"]]),
+    }
+    cache[key] = {"response": response, "mesh": res["mesh"], "scalar": res["scalar"], "clim": clim}
+    while len(cache) > 3:            # bound RAM
         cache.popitem(last=False)
     return response
 

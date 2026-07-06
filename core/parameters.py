@@ -66,6 +66,9 @@ AXES = ["x", "y", "z"]
 SIGN_CONVENTIONS = ["target_outside_positive", "target_outside_negative"]
 STANDARD_VIEWS = ["anterior", "posterior", "lateral", "medial", "superior", "inferior"]
 SCAN_ROLES = ["scan_a", "scan_b"]
+# N-way "compare all visits at once" (same anatomical side) map choices.
+NWAY_AGGREGATES = ["baseline_to_latest", "mean_signed", "max_abs_signed"]
+NWAY_COLORED = ["latest", "baseline"]
 # DISPLAY-ONLY surface reconstruction levels (3-matic-equivalent smooth render).
 MESH_RECONSTRUCT_LEVELS = ["raw", "smooth", "wrap"]
 
@@ -223,6 +226,20 @@ REGISTRY: list[ParamSpec] = [
         key="signed_distance_sign", label="Signed-distance convention", group="Comparison",
         control=ControlType.ENUM, default="target_outside_positive", choices=SIGN_CONVENTIONS, mode=Mode.B,
         help="target_outside_positive: target surface outside reference = positive (gain/hypertrophy).",
+    ),
+    # ---- N-way "all visits at once" (same side across series) ---------------
+    ParamSpec(
+        key="nway_aggregate", label="All-visits map", group="Comparison",
+        control=ControlType.ENUM, default="baseline_to_latest", choices=NWAY_AGGREGATES, mode=Mode.B,
+        help="When comparing 3+ visits at once: baseline_to_latest = net change (baseline→last, "
+             "preserves direction); mean_signed = average signed change; max_abs_signed = largest "
+             "|change| at each point. A per-vertex spread (SD across visits) is always available.",
+    ),
+    ParamSpec(
+        key="nway_colored", label="Colour which surface", group="Comparison",
+        control=ControlType.ENUM, default="latest", choices=NWAY_COLORED, mode=Mode.B,
+        help="Which surface carries the colour map: the latest visit (default) or the baseline. "
+             "The other visits are drawn as faint ghost shells.",
     ),
 
     # ---- Mode B coloring ----------------------------------------------------
