@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="What the Mode B difference map shows">
+  <rect width="760" height="320" fill="#ffffff"/>
+  <text x="24" y="34" font-size="16" font-weight="700" fill="#1f2937">What the difference map shows (Mode B)</text>
+  <text x="24" y="56" font-size="12.5" fill="#6b7280">Two bone surfaces are anchored (registered). The colour is the signed distance between them — not a thickness map.</text>
+
+  <!-- surface profile illustration -->
+  <polygon points="130,200 168,152 215,152 253,200" fill="#d73027" fill-opacity="0.82"/>
+  <polygon points="310,200 348,244 398,244 435,200" fill="#1a9850" fill-opacity="0.82"/>
+  <line x1="55" y1="200" x2="465" y2="200" stroke="#9aa0aa" stroke-width="2" stroke-dasharray="7 5"/>
+  <polyline points="55,200 130,200 168,152 215,152 253,200 310,200 348,244 398,244 435,200 465,200" fill="none" stroke="#374151" stroke-width="3" stroke-linejoin="round"/>
+
+  <text x="60" y="224" font-size="12" fill="#6b7280">reference surface (the one “under it”, 0 mm)</text>
+  <text x="192" y="140" font-size="12.5" font-weight="600" fill="#374151" text-anchor="middle">this surface</text>
+  <text x="192" y="186" font-size="11.5" fill="#7f1d1d" text-anchor="middle" font-weight="600">outside → +</text>
+  <text x="373" y="222" font-size="11.5" fill="#14532d" text-anchor="middle" font-weight="600">inside → −</text>
+
+  <!-- colour key -->
+  <line x1="540" y1="70" x2="540" y2="270" stroke="#e5e7eb" stroke-width="1"/>
+  <rect x="566" y="72" width="30" height="26" fill="#d73027"/>
+  <rect x="566" y="98" width="30" height="26" fill="#e88e82"/>
+  <rect x="566" y="124" width="30" height="26" fill="#f7f7f7" stroke="#d1d5db"/>
+  <rect x="566" y="150" width="30" height="26" fill="#8cc98a"/>
+  <rect x="566" y="176" width="30" height="26" fill="#1a9850"/>
+  <text x="606" y="82" font-size="12.5" font-weight="600" fill="#7f1d1d">+ excess</text>
+  <text x="606" y="98" font-size="11" fill="#6b7280">bone gained / grew (outside)</text>
+  <text x="606" y="142" font-size="12.5" font-weight="600" fill="#374151">0 no change</text>
+  <text x="606" y="186" font-size="12.5" font-weight="600" fill="#14532d">− deficit</text>
+  <text x="606" y="202" font-size="11" fill="#6b7280">bone lost / inside</text>
+  <text x="566" y="238" font-size="11" fill="#6b7280">colours = the DIFFERENCE (mm),</text>
+  <text x="566" y="253" font-size="11" fill="#6b7280">reversible; swap flips the sign.</text>
+</svg>

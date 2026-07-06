@@ -29,7 +29,7 @@ exposes the identical feature set.</sub>
 | Mode A — cortical thickness | Mode B — left/right deviation |
 |---|---|
 | ![Thickness map](docs/assets/phase2_thickness.png) | ![Signed deviation map](docs/assets/qa_trame_rework_deviation.png) |
-| One scan. Green = thin wall, red = thick, in mm. | Two sides registered; red = bone gained, blue = lost. |
+| One scan. Green = thin wall, red = thick, in mm. | Two surfaces registered; **+ = outside (excess), − = inside (deficit)**, in mm. |
 
 ![Cortical thickness on the bundled demo at native resolution — the auto-isolated
 proximal humerus with a smooth reconstructed surface and the Fig-2 colorbar](docs/assets/demo_best_thickness.png)
@@ -45,13 +45,23 @@ the remeshed surface, not recomputed).</sub>
 - **Mode A** segments the bone from its CT density, computes wall thickness at
   every surface point, and colours it with the paper's green→red scale.
 - **Mode B** rebuilds two bone surfaces, aligns them (with an optional left/right
-  mirror), and reports a signed surface deviation with per-region statistics. The
-  two surfaces can be the **Left and Right of one scan**, or the **same side of two
-  different scans** — load a **baseline and a follow-up** (or several visits) into
-  one session and compare them: the standard is to anchor each series' Left to the
-  others' Left and Right to Right, and you choose which pair to view. Reference and
-  target are swappable at upload **and** afterwards (swapping flips the sign and the
-  red/green colours), and every panel labels which series·side it is showing.
+  mirror), and reports a **signed surface difference** with per-region statistics —
+  at each point, how far one surface sits **outside** (excess, +) or **inside**
+  (deficit, −) the other. The two surfaces can be the **Left and Right of one scan**,
+  or the **same side of two different scans** — load a **baseline and a follow-up**
+  (or several visits) and compare them; the standard anchors each series' Left to the
+  others' Left and Right to Right, and you pick which pair to view. Reference/target
+  are swappable (swapping flips the sign and colours), and **every panel — plus an
+  always-on banner over the 3D view — states exactly which series·side is shown.**
+
+![What the Mode B difference map shows: two anchored surfaces, red where one sits
+outside the other (excess) and green where inside (deficit)](docs/assets/comparison_guide.svg)
+
+- **Compare all visits at once** — with 3+ visits, the **All visits** mode overlays
+  every visit's same side and colours **one** surface by the difference across all of
+  them (baseline→latest net change by default; the others render as faint ghost
+  shells). **red = excess, green = deficit** (the `green_white_red` map, reversible).
+- **Measure** — click two points on the surface to read the straight-line distance in mm.
 
 Everything is interactive and applies in real time:
 
@@ -67,6 +77,9 @@ Everything is interactive and applies in real time:
   a baseline and a **de-identified synthetic follow-up** so Mode B's baseline→follow-up
   comparison works out of the box. (Real second-patient data is never bundled; the
   follow-up is derived from the de-identified demo by `scripts/make_multi_demo.py`.)
+- **Clear what you don't want** — the panel lists every loaded series; **✕** removes one
+  (e.g. drop the demo), and **Upload NEW scan** replaces everything with your own data.
+  **＋ Add another visit** keeps the current ones so you can compare across time.
 - **Isolate a bone by clicking it** — turn on **Clip / isolate**, tick *Load whole
   bone (all pieces)*, then **click a piece** on the 3D surface: everything not
   connected to it is hidden, leaving just that bone (e.g. the humerus). *Reset
