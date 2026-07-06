@@ -22,6 +22,11 @@ import RegionThumbnails from './RegionThumbnails';
 
 const UPLOAD_ACCEPT = '.zip,.nii,.nii.gz,.stl,.ply,.obj,.vtp';
 
+// Capitalise a bare side name for the cross-series "Side to compare" options.
+function cap(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
 // Label a side key. Later-series sides are namespaced ("s1/left"); when a
 // `series` list is supplied we prefix the series name so the user always sees
 // WHICH scan a side belongs to (e.g. "follow-up · Left").
