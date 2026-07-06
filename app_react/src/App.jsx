@@ -47,6 +47,9 @@ import { computeMaskedStats } from './clipStats';
 import { colormapEndpoints } from './colors';
 
 const ZERO_NUDGE = { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 };
+// Stable empty array so the Viewport ghost effect's [ghosts] dep doesn't change
+// identity every render when there are no ghost overlays (the common case).
+const NO_GHOSTS = [];
 const DEFAULT_CAMERA = { azimuth: 0, elevation: 0, roll: 0, zoom: 1 };
 
 export default function App() {
@@ -1361,7 +1364,7 @@ export default function App() {
             measureMode={measureMode}
             onMeasurePick={onMeasurePick}
             measurePoints={measurePoints}
-            ghosts={compareMode === 'group' && isDeviationView ? groupGhosts : []}
+            ghosts={compareMode === 'group' && isDeviationView ? groupGhosts : NO_GHOSTS}
           />
 
           {displayGeometry && (
@@ -1492,10 +1495,24 @@ export default function App() {
               // both are read live rather than hardcoded.
               const center = Number(values?.mode_b_center ?? 0);
               const invSign = values?.signed_distance_sign === 'target_outside_negative';
-              const outside = (
+              const isGroup = compareMode === 'group';
+              // Which surface is coloured + what it's compared against (data-driven,
+              // not hardcoded — nway_colored / nway_aggregate are user-editable).
+              const ci = groupInfo?.colored_index;
+              const coloredSurf = ci === 0 ? 'baseline' : 'latest visit';
+              const nOther = Math.max((groupInfo?.n_visits ?? 2) - 1, 1);
+              const groupVs =
+                groupInfo?.aggregate === 'baseline_to_latest'
+                  ? (ci === 0 ? 'the latest visit' : 'baseline')
+                  : `the other ${nOther} visit(s)`;
+              const outside = isGroup ? (
+                <span>the coloured surface sits <strong>outside</strong>: bone <strong>excess / gained</strong> here</span>
+              ) : (
                 <span>{tgtL} sits <strong>outside</strong> {refL}: bone <strong>gained / grew</strong> here</span>
               );
-              const inside = (
+              const inside = isGroup ? (
+                <span>the coloured surface sits <strong>inside</strong>: bone <strong>deficit / lost</strong> here</span>
+              ) : (
                 <span>{tgtL} sits <strong>inside</strong> {refL}: bone <strong>lost / resorbed</strong> here</span>
               );
               return (
@@ -1514,9 +1531,8 @@ export default function App() {
                       each point — not a thickness map. */}
                   <div className="dev-key">
                     <div className="dev-key-head">
-                      {compareMode === 'group' ? (
-                        <>Coloured surface (latest visit) vs the other{' '}
-                          {Math.max((groupInfo?.n_visits ?? 2) - 1, 1)} visit(s):</>
+                      {isGroup ? (
+                        <>Coloured surface (<strong>{coloredSurf}</strong>) vs {groupVs}:</>
                       ) : (
                         <>How <strong>{tgtL}</strong> differs from <strong>{refL}</strong>:</>
                       )}
@@ -1540,20 +1556,22 @@ export default function App() {
                       <span><strong>− (negative)</strong> — {invSign ? outside : inside}</span>
                     </div>
                   </div>
-                  <div className="legend-swap-row">
-                    <span className="legend-swap-info">
-                      <strong>Target</strong> {tgtL} · <strong>Reference</strong> {refL}
-                    </span>
-                    <button
-                      type="button"
-                      className="legend-swap-btn"
-                      onClick={swapSides}
-                      disabled={referenceSide === targetSide}
-                      title="Swap reference / target — inverts the sign (and the colours) and recomputes"
-                    >
-                      ⇄ Swap
-                    </button>
-                  </div>
+                  {!isGroup && (
+                    <div className="legend-swap-row">
+                      <span className="legend-swap-info">
+                        <strong>Target</strong> {tgtL} · <strong>Reference</strong> {refL}
+                      </span>
+                      <button
+                        type="button"
+                        className="legend-swap-btn"
+                        onClick={swapSides}
+                        disabled={referenceSide === targetSide}
+                        title="Swap reference / target — inverts the sign (and the colours) and recomputes"
+                      >
+                        ⇄ Swap
+                      </button>
+                    </div>
+                  )}
                 </DraggablePanel>
               );
             })()}

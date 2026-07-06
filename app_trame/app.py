@@ -1678,8 +1678,13 @@ ctrl.do_export_figures = do_export_figures
 # --------------------------------------------------------------------------- #
 _MODE_B_HOVER_SCALARS = ["deviation_mm", "ref_thickness_mm", "tgt_thickness_mm",
                         "thickness_diff_mm"]
+# The hover-scalar list of the LAST Mode-B compute (pairwise or group); set by
+# _compute_worker so the group view surfaces spread_mm instead of the pair-only
+# thickness fields. Falls back to the pairwise default.
+_LAST_HOVER_SCALARS = list(_MODE_B_HOVER_SCALARS)
 _HOVER_LABELS = {
     "deviation_mm": ("Deviation", "%+.2f"),
+    "spread_mm": ("Spread across visits (SD)", "%.2f"),
     "ref_thickness_mm": ("Reference thickness", "%.2f"),
     "tgt_thickness_mm": ("Target thickness", "%.2f"),
     "thickness_diff_mm": ("Thickness diff (ref − tgt)", "%+.2f"),
@@ -1723,7 +1728,7 @@ def _on_hover(point, *_a, **_k):
     try:
         pid = mesh.find_closest_point(np.asarray(point, dtype=float))
         pos = np.asarray(mesh.points[pid], dtype=float)
-        keys = _MODE_B_HOVER_SCALARS if mode_b_dev else [primary_key]
+        keys = _LAST_HOVER_SCALARS if mode_b_dev else [primary_key]
         readings = _read_hover_scalars(mesh, pid, keys)
     except Exception:  # noqa: BLE001
         return
@@ -2083,6 +2088,12 @@ def _compute_worker(req_id: int | None = None):
                  ("added vol (cc)", f"{st['added_volume_cc']:.2f}"),
                  ("removed vol (cc)", f"{st['removed_volume_cc']:.2f}")],
             )
+
+        # Remember this compute's hover-scalar list so the tooltip surfaces the
+        # right fields (e.g. spread_mm in the all-visits group view).
+        if not wants_thickness and isinstance(res, dict):
+            global _LAST_HOVER_SCALARS
+            _LAST_HOVER_SCALARS = list(res.get("hover_scalars", _MODE_B_HOVER_SCALARS))
 
         # SUPERSEDE guard: if a newer change landed while this compute ran, drop
         # our result silently — the newer request owns the viewport now.
@@ -2843,24 +2854,29 @@ with SinglePageWithDrawerLayout(server) as layout:
                     html.Div("📊 {{ group_msg }}",
                              v_if="compare_group_mode",
                              style="font-size:11px;color:#1a4fd6;margin-top:4px;line-height:1.4")
+                # In group mode the ref/target PAIR is meaningless — the anatomical
+                # side is chosen by this one selector (its bare name); the target
+                # selector + swap are hidden so nothing can silently repick.
                 v3.VSelect(v_model=("ref_side",), items=("side_options",),
-                           label="Reference (baseline, deviation = 0)", density="compact",
-                           hide_details=True, variant="outlined", classes="mb-1",
-                           disabled=("compare_group_mode",))
-                v3.VSelect(v_model=("tgt_side",), items=("side_options",),
-                           label="Target (measured against reference)", density="compact",
+                           label=("compare_group_mode ? 'Side to compare across visits' "
+                                  ": 'Reference (baseline, deviation = 0)'",),
+                           density="compact",
                            hide_details=True, variant="outlined", classes="mb-1")
-                v3.VBtn(
-                    "Swap reference / target", size="small", block=True,
-                    variant="tonal", color="primary",
-                    prepend_icon="mdi-swap-horizontal",
-                    disabled=("ref_side === tgt_side",),
-                    click=ctrl.swap_ref_tgt)
-                html.Div(
-                    "Deviation = the DIFFERENCE between the two surfaces: "
-                    "+ target outside reference (bone gained) · − inside (lost). "
-                    "Swapping flips the sign and colours.",
-                    style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
+                with html.Div(v_if="!compare_group_mode"):
+                    v3.VSelect(v_model=("tgt_side",), items=("side_options",),
+                               label="Target (measured against reference)", density="compact",
+                               hide_details=True, variant="outlined", classes="mb-1")
+                    v3.VBtn(
+                        "Swap reference / target", size="small", block=True,
+                        variant="tonal", color="primary",
+                        prepend_icon="mdi-swap-horizontal",
+                        disabled=("ref_side === tgt_side",),
+                        click=ctrl.swap_ref_tgt)
+                    html.Div(
+                        "Deviation = the DIFFERENCE between the two surfaces: "
+                        "+ target outside reference (bone gained) · − inside (lost). "
+                        "Swapping flips the sign and colours.",
+                        style="font-size:11px;color:#666;margin-top:4px;line-height:1.4")
                 # With 2+ series, spell out the cross-series standard + offer the
                 # in-scan Left-vs-Right option as one-click buttons.
                 html.Div(

@@ -441,25 +441,38 @@ export default function ControlPanel({
                 All visits at once
               </button>
             </div>
-            {compareMode === 'group' && (
-              <div className="roles-current" style={{ marginTop: '6px' }}>
-                Overlaying <strong>{groupVisitCount} visits</strong> (same side). The{' '}
-                <strong>latest</strong> surface is coloured by the difference; earlier
-                visits are faint ghost shells. Red = excess, green = deficit.
-                {groupInfo?.registrations && (
-                  <div className="group-reg">
-                    {groupInfo.registrations.map((r, i) => (
-                      <span key={i} className={`reg-badge${r.reliable ? '' : ' bad'}`}>
-                        visit {i}: {r.reliable ? 'aligned' : 'low overlap'}
-                        {typeof r.inlier_fraction === 'number'
-                          ? ` (${Math.round(r.inlier_fraction * 100)}%)`
-                          : ''}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {compareMode === 'group' && (() => {
+              const ci = groupInfo?.colored_index;
+              const coloredSurf = ci === 0 ? 'baseline' : 'latest';
+              const invSign = values?.signed_distance_sign === 'target_outside_negative';
+              const vs =
+                groupInfo?.aggregate === 'baseline_to_latest'
+                  ? ci === 0
+                    ? 'the latest visit'
+                    : 'baseline'
+                  : 'the other visits';
+              return (
+                <div className="roles-current" style={{ marginTop: '6px' }}>
+                  Overlaying <strong>{groupVisitCount} visits</strong> (same side). The{' '}
+                  <strong>{coloredSurf}</strong> surface is coloured by the difference vs{' '}
+                  {vs}; the others are faint ghost shells.{' '}
+                  {invSign ? 'Red = deficit, green = excess.' : 'Red = excess, green = deficit.'}
+                  {groupInfo?.registrations && (
+                    <div className="group-reg">
+                      {groupInfo.registrations.map((r, i) => (
+                        <span key={i} className={`reg-badge${r.reliable ? '' : ' bad'}`}>
+                          visit {i}
+                          {i === ci ? ' (coloured)' : ''}: {r.reliable ? 'aligned' : 'low overlap'}
+                          {typeof r.inlier_fraction === 'number'
+                            ? ` (${Math.round(r.inlier_fraction * 100)}%)`
+                            : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
 
