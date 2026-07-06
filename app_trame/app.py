@@ -311,6 +311,17 @@ def _refresh_session_ui(preserve_roles: bool = False) -> None:
         state.mode = "B"
     _update_dev_labels()  # series-aware deviation legend labels
     state.meta_html = _meta_html()
+    # A fresh scan invalidates any in-progress measurement (parity with React).
+    _MEASURE_PTS.clear()
+    for _nm in ("measure_a", "measure_b", "measure_line"):
+        try:
+            PLOTTER.remove_actor(_nm)
+        except Exception:  # noqa: BLE001
+            pass
+    state.measure_mode = False
+    state.measure_dist_mm = None
+    state.measure_msg = "Click the first point on the surface."
+    state.measure_available = bool(names)  # a surface is loaded -> measure allowed
     # A fresh scan invalidates any previously shown region previews.
     state.region_thumbs = []
     state.region_thumbs_side = ""
@@ -470,10 +481,14 @@ state.dev_neg_color = "#2166ac"
 _SW = "display:inline-block;width:14px;height:14px;border-radius:3px;flex:none;"
 state.dev_pos_swatch = _SW + "background:#b2182b"
 state.dev_neg_swatch = _SW + "background:#2166ac"
+state.dev_pos_text = "+ outside reference: bone gained / grew"
+state.dev_neg_text = "− inside reference: bone lost / resorbed"
+state.dev_mid_text = "0: surfaces coincide — no change"
 # Measure tool: click two surface points to read the straight-line mm distance.
 state.measure_mode = False
 state.measure_dist_mm = None
 state.measure_msg = "Click the first point on the surface."
+state.measure_available = False  # true once a surface is loaded (gates the toggle)
 
 # --- Region thumbnails (visual picker) ------------------------------------ #
 # Small rendered previews per connected bone region, computed via
@@ -2025,6 +2040,11 @@ def _compute_worker(req_id: int | None = None):
             state.stats_html = html_out
             state.status = "done"
             state.status_msg = "Recompute complete."
+        # A recompute rebuilds the scene (plotter.clear()), which drops the measure
+        # markers — re-add them so the on-screen markers stay consistent with the
+        # still-displayed mm readout and the retained points.
+        if state.measure_mode and _MEASURE_PTS:
+            _render_measure()
         if ctrl.view_update:
             ctrl.view_update()
         state.flush()
@@ -2089,9 +2109,22 @@ def _update_dev_labels(*_a, **_k):
     state.dev_neg_color = neg
     state.dev_pos_swatch = _sw + f"background:{pos}"
     state.dev_neg_swatch = _sw + f"background:{neg}"
+    # +/- meaning follows the SIGN convention (target_outside_negative inverts it),
+    # and the neutral label follows mode_b_center (white = centre, not always 0).
+    inv = getattr(state, "signed_distance_sign", "target_outside_positive") == "target_outside_negative"
+    outside = "outside reference: bone gained / grew"
+    inside = "inside reference: bone lost / resorbed"
+    state.dev_pos_text = "+ " + (inside if inv else outside)
+    state.dev_neg_text = "− " + (outside if inv else inside)
+    try:
+        center = float(state.mode_b_center or 0)
+    except Exception:  # noqa: BLE001
+        center = 0.0
+    state.dev_mid_text = ("0: surfaces coincide — no change" if center == 0
+                          else f"{center:g} mm — neutral (colour centre)")
 
 
-for _k in ("ref_side", "tgt_side", "mode_b_colormap"):
+for _k in ("ref_side", "tgt_side", "mode_b_colormap", "signed_distance_sign", "mode_b_center"):
     state.change(_k)(_update_dev_labels)
 
 
@@ -2172,6 +2205,10 @@ def apply_display_only(*_a, **_k):
             build_thickness_scene(PLOTTER, mesh, params=params,
                                   side_label=_side_label(state.side))
         _enable_hover()
+        # A display-only recolor also rebuilds the scene (plotter.clear()); re-add
+        # the measure markers so they don't vanish on a colormap/opacity change.
+        if state.measure_mode and _MEASURE_PTS:
+            _render_measure()
         if ctrl.view_update:
             ctrl.view_update()
     except Exception:  # noqa: BLE001
@@ -2654,7 +2691,7 @@ with SinglePageWithDrawerLayout(server) as layout:
             v_model=("measure_mode", False),
             label="Measure (click 2 points → mm)",
             density="compact", hide_details=True, color="primary",
-            style="margin-left:16px;flex:none")
+            disabled=("!measure_available",), style="margin-left:16px;flex:none")
         # Measure readout: the distance (or the next-click hint) + a Clear button.
         with html.Div(v_if="measure_mode", classes="d-flex align-center",
                       style="margin-left:12px;gap:8px;flex:none"):
@@ -2759,17 +2796,17 @@ with SinglePageWithDrawerLayout(server) as layout:
                 with html.Div(classes="d-flex align-center",
                               style="gap:6px;font-size:11px;margin-bottom:3px;line-height:1.35"):
                     html.Span(style=("dev_pos_swatch",))
-                    html.Span("+ outside reference: bone gained / grew")
+                    html.Span("{{ dev_pos_text }}")
                 with html.Div(classes="d-flex align-center",
                               style="gap:6px;font-size:11px;margin-bottom:3px;line-height:1.35"):
                     html.Span(style="display:inline-block;width:14px;height:14px;"
                                     "border-radius:3px;flex:none;background:#f7f7f7;"
                                     "border:1px solid #ccc")
-                    html.Span("0: surfaces coincide — no change")
+                    html.Span("{{ dev_mid_text }}")
                 with html.Div(classes="d-flex align-center",
                               style="gap:6px;font-size:11px;line-height:1.35"):
                     html.Span(style=("dev_neg_swatch",))
-                    html.Span("− inside reference: bone lost / resorbed")
+                    html.Span("{{ dev_neg_text }}")
 
             # ---- Region picker (visual thumbnails) ---------------------------
             # Only meaningful for the thickness view of a volume side. Each region

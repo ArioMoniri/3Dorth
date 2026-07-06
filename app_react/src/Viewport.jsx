@@ -679,7 +679,12 @@ export default function Viewport({
       // Everything else (isolate / MPR pick) is suppressed so the two gestures
       // never fight. App accumulates the points and computes the mm distance.
       if (measureModeRef.current) {
-        onMeasurePickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]]);
+        // Only accept hits on an actual BONE mesh — never the translucent oblique
+        // cutting plane or an already-placed endpoint sphere (all pickable), which
+        // would otherwise yield a wrong distance. Mirrors the isolate guard below.
+        if (hit.actor === ctx.actor || hit.actor === ctx.actor2) {
+          onMeasurePickRef.current?.([hit.pos[0], hit.pos[1], hit.pos[2]]);
+        }
         return;
       }
       // When the click lands on the PRIMARY bone, also report the connected
@@ -1088,7 +1093,10 @@ export default function Viewport({
       ctx.measureLineActor.setVisibility(false);
     }
     ctx.renderWindow?.render();
-  }, [measurePoints]);
+    // Depend on geometry too: a different mesh (thickness<->deviation toggle) can
+    // change the bounds while the points are unchanged, so the sphere radius must
+    // re-derive from the new mesh, not stay stuck at the old scale.
+  }, [measurePoints, geometry?.url, secondGeometry?.url]);
 
   // ---- move / show / hide the oblique cutting-plane actor ------------------
   // Builds an in-plane basis (u, v) from the normal the same way the server's

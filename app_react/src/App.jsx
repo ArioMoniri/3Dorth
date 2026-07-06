@@ -171,6 +171,16 @@ export default function App() {
   const autoReadyRef = useRef(false);
 
   // ---- load config + registry + open a session -----------------------------
+  // Measure only applies to the 3D map/oblique views. Leaving them (to Images /
+  // Compare) fully EXITS measure — otherwise the toggle is merely disabled and the
+  // still-mounted Viewport keeps hijacking clicks as measure picks.
+  useEffect(() => {
+    if (centerView !== 'map' && centerView !== 'oblique') {
+      setMeasureMode(false);
+      setMeasurePoints([]);
+    }
+  }, [centerView]);
+
   useEffect(() => {
     Promise.all([fetchConfig(), fetchParameters(), createSession()])
       .then(([cfg, params, sess]) => {
@@ -1397,6 +1407,17 @@ export default function App() {
               const tgtL = sideLabelOf(targetSide, session?.series);
               const refL = sideLabelOf(referenceSide, session?.series);
               const ep = colormapEndpoints(displayGeometry.colormap);
+              // White tracks the diverging CENTRE (mode_b_center), and the sign
+              // convention (signed_distance_sign) can invert what +/- mean — so
+              // both are read live rather than hardcoded.
+              const center = Number(values?.mode_b_center ?? 0);
+              const invSign = values?.signed_distance_sign === 'target_outside_negative';
+              const outside = (
+                <span>{tgtL} sits <strong>outside</strong> {refL}: bone <strong>gained / grew</strong> here</span>
+              );
+              const inside = (
+                <span>{tgtL} sits <strong>inside</strong> {refL}: bone <strong>lost / resorbed</strong> here</span>
+              );
               return (
                 <DraggablePanel className="dp-legend">
                   <Legend
@@ -1417,15 +1438,21 @@ export default function App() {
                     </div>
                     <div className="dev-key-row">
                       <span className="dev-sw" style={{ background: ep.high }} />
-                      <span><strong>+ (positive)</strong> — {tgtL} sits <strong>outside</strong> {refL}: bone <strong>gained / grew</strong> here</span>
+                      <span><strong>+ (positive)</strong> — {invSign ? inside : outside}</span>
                     </div>
                     <div className="dev-key-row">
                       <span className="dev-sw" style={{ background: ep.mid, border: '1px solid #ccc' }} />
-                      <span><strong>0</strong> — surfaces coincide: <strong>no change</strong></span>
+                      <span>
+                        {center === 0 ? (
+                          <><strong>0</strong> — surfaces coincide: <strong>no change</strong></>
+                        ) : (
+                          <><strong>{center}</strong> mm — neutral (colour centre)</>
+                        )}
+                      </span>
                     </div>
                     <div className="dev-key-row">
                       <span className="dev-sw" style={{ background: ep.low }} />
-                      <span><strong>− (negative)</strong> — {tgtL} sits <strong>inside</strong> {refL}: bone <strong>lost / resorbed</strong> here</span>
+                      <span><strong>− (negative)</strong> — {invSign ? outside : inside}</span>
                     </div>
                   </div>
                   <div className="legend-swap-row">
@@ -1578,9 +1605,12 @@ function sideNameOf(sideKey) {
 function sideLabelOf(sideKey, series) {
   const bare = cap(sideNameOf(sideKey));
   const sid = seriesIdOf(sideKey);
-  const entry = (series || []).find((s) => s.id === sid);
+  // Only prefix the series name when there's more than one series to disambiguate
+  // (matches trame's _side_label); a lone series would otherwise read "s0 · Left".
+  if (!series || series.length <= 1) return bare;
+  const entry = series.find((s) => s.id === sid);
   const name = entry?.name;
-  return name ? `${name} · ${bare}` : bare;
+  return name && name !== sid ? `${name} · ${bare}` : bare;
 }
 
 function readableError(e) {
