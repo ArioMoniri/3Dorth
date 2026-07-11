@@ -159,9 +159,46 @@ export default function ControlPanel({
   const showDeviation = (mode === 'B' && modeBView === 'deviation') || isMesh;
   const primaryBusy = computing || uploading;
   const [showHelp, setShowHelp] = useState(true);
+  const [showGuide, setShowGuide] = useState(true);
 
   return (
     <aside className="panel">
+      {/* ---- onboarding: reproduce the paper (Thickness), then compare ------ */}
+      {showGuide && (
+        <section className="panel-section guide-card">
+          <div className="guide-head">
+            <h2>Reproduce Guo et&nbsp;al. 2022</h2>
+            <button
+              type="button"
+              className="guide-dismiss"
+              onClick={() => setShowGuide(false)}
+              aria-label="Hide this guide"
+              title="Hide"
+            >
+              ✕
+            </button>
+          </div>
+          <ol className="guide-steps">
+            <li>
+              Keep <b>Thickness&nbsp;(wall map)</b> selected — the green→red
+              cortical-thickness map <i>is</i> the paper's method. Hover the bone
+              to read the wall thickness in mm.
+            </li>
+            <li>
+              Pick a <b>side</b> below (or a <b>Region</b>) to isolate the bone,
+              then tick the <b>Fig-2 line</b> / <b>change-region height</b> in
+              Export to lay the paper's two measurements over the figure.
+            </li>
+            <li>
+              Have two scans? <b>＋ Add another visit</b>, then switch to{' '}
+              <b>Difference&nbsp;(compare 2)</b> to see where bone was gained
+              (red) or lost (green). <i>Difference is a project extension — it is
+              not in the paper.</i>
+            </li>
+          </ol>
+        </section>
+      )}
+
       {/* ---- scan / session ------------------------------------------------ */}
       <section className="panel-section">
         <h2>Scan</h2>
@@ -235,26 +272,43 @@ export default function ControlPanel({
                     ? 'Loaded scan:'
                     : `${series.length} series loaded — anchored against each other:`}
                 </div>
-                {series.map((s) => (
-                  <div key={s.id} className="series-row" title={s.name}>
-                    <span className="series-tag">{s.id}</span>
-                    <span className="series-name">{s.name}</span>
-                    <span className="series-sides">
-                      {(s.sides || []).map((k) => prettySide(k, null)).join(' · ')}
-                    </span>
-                    {series.length > 1 && onRemoveSeries && (
-                      <button
-                        type="button"
-                        className="series-remove"
-                        onClick={() => onRemoveSeries(s.id)}
-                        title={`Remove ${s.name} from this comparison`}
-                        aria-label={`Remove ${s.name}`}
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                ))}
+                {series.map((s) => {
+                  // In Thickness mode with >1 scan, clicking a row shows THAT scan's
+                  // map (for the currently-selected anatomical side).
+                  const rowClickable =
+                    colourBy === 'thickness' && !isMesh && series.length > 1 && side !== 'both';
+                  const bare = sideNameOf(side) || 'left';
+                  const rowKey = rowClickable ? keyFor(s.id, bare) : null;
+                  const rowActive = rowKey && seriesIdOf(side) === s.id;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`series-row${rowClickable ? ' clickable' : ''}${rowActive ? ' active' : ''}`}
+                      title={rowClickable ? `Show ${s.name} · ${cap(bare)} thickness` : s.name}
+                      onClick={rowKey ? () => onSideChange(rowKey) : undefined}
+                    >
+                      <span className="series-tag">{s.id}</span>
+                      <span className="series-name">{s.name}</span>
+                      <span className="series-sides">
+                        {(s.sides || []).map((k) => prettySide(k, null)).join(' · ')}
+                      </span>
+                      {series.length > 1 && onRemoveSeries && (
+                        <button
+                          type="button"
+                          className="series-remove"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemoveSeries(s.id);
+                          }}
+                          title={`Remove ${s.name} from this comparison`}
+                          aria-label={`Remove ${s.name}`}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>
@@ -419,6 +473,35 @@ export default function ControlPanel({
                 ? 'Pick a connected region below to colour just that structure.'
                 : 'One surface, coloured by its cortical wall thickness.'}
         </p>
+
+        {/* Which-scan picker (thickness, 2+ series): the "Show" buttons choose the
+            anatomical side; THIS chooses which loaded scan/visit that side comes
+            from — so a thickness map is never ambiguous about which series it is.
+            Hidden for the bilateral 'both' view (that renders the first scan). */}
+        {colourBy === 'thickness' && !isMesh && series.length > 1 && side !== 'both' && (() => {
+          const bare = sideNameOf(side) || 'left';
+          const withSide = series.filter((s) => (s.sides || []).some((k) => sideNameOf(k) === bare));
+          if (withSide.length < 2) return null;
+          const activeSeries = seriesIdOf(side);
+          return (
+            <label className="ctl ctl-enum which-scan">
+              <span className="ctl-label" title="Which loaded scan / visit this thickness map is for">
+                Which scan
+              </span>
+              <select
+                value={activeSeries}
+                onChange={(e) => {
+                  const k = keyFor(e.target.value, bare);
+                  if (k) onSideChange(k);
+                }}
+              >
+                {withSide.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name} · {cap(bare)}</option>
+                ))}
+              </select>
+            </label>
+          );
+        })()}
 
         {/* The old "Mode B view" thickness/deviation sub-toggle is gone — the
             toolbar "Colour by: Thickness | Difference" now drives it directly. */}

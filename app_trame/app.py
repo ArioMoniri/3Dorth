@@ -2197,15 +2197,22 @@ def _side_label(name: str) -> str:
 def _set_view_banner() -> None:
     """Set the always-visible 'what is on screen' banner from the current state."""
     try:
+        # +/- meaning follows the sign convention (target_outside_negative inverts
+        # what red/green mean), mirroring the React banner key.
+        inv = getattr(state, "signed_distance_sign",
+                      "target_outside_positive") == "target_outside_negative"
+        key = "red=deficit / green=excess" if inv else "red=excess / green=deficit"
         if state.mode == "A" or (state.mode == "B" and state.b_view == "thickness"):
             what = ("Cortical thickness — Left + Right"
                     if state.side == "both" else
                     f"Cortical thickness — {_side_label(state.side)}")
         elif state.compare_group_mode and len(SESSION.get("series", [])) >= 2:
             what = f"All-visits difference · {state.group_msg or ''}".strip(" ·")
+        elif getattr(state, "diff_bilateral", False):
+            what = f"Difference — Left↔Left + Right↔Right · {key}"
         else:
             what = (f"Difference — {_side_label(state.tgt_side)} vs "
-                    f"{_side_label(state.ref_side)} · red=excess / green=deficit")
+                    f"{_side_label(state.ref_side)} · {key}")
         state.view_banner = what
     except Exception:  # noqa: BLE001
         pass

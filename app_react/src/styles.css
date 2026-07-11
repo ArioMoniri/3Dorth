@@ -701,6 +701,47 @@ body {
   border-radius: 4px;
 }
 .series-remove:hover { background: #fdeae0; color: #a3352d; }
+/* Clickable series rows (Thickness, 2+ scans): pick which scan's map to show. */
+.series-row.clickable { cursor: pointer; border-radius: 5px; padding: 3px 6px; }
+.series-row.clickable:hover { background: var(--hover, rgba(0, 0, 0, 0.05)); }
+.series-row.clickable.active { background: var(--accent-soft, rgba(90, 120, 255, 0.14)); }
+.series-row.clickable.active .series-name { color: var(--accent-2); }
+
+/* ---- "Colour by" sub-labels (wall map / compare 2) ----------------------- */
+.mode-toggle-sub {
+  display: block;
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  opacity: 0.72;
+  margin-top: -1px;
+}
+
+/* ---- onboarding "Reproduce Guo 2022" card -------------------------------- */
+.guide-card {
+  background: var(--accent-soft, rgba(90, 120, 255, 0.10));
+  border: 1px solid var(--accent-2, #5b78ff);
+  border-radius: 8px;
+}
+.guide-head { display: flex; align-items: center; justify-content: space-between; }
+.guide-head h2 { margin: 0; }
+.guide-dismiss {
+  border: none; background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 4px;
+}
+.guide-dismiss:hover { background: rgba(0, 0, 0, 0.08); color: var(--text); }
+.guide-steps { margin: 8px 0 0; padding-left: 18px; }
+.guide-steps li { font-size: 12px; line-height: 1.5; margin-bottom: 6px; color: var(--text); }
+.guide-steps li:last-child { margin-bottom: 0; }
+
+/* ---- which-scan picker + MPR slicing label ------------------------------- */
+.ctl.which-scan { margin-top: 8px; }
+.mpr-slicing-label {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 8px 6px;
+}
+.mpr-slicing-label strong { color: var(--text); }
 
 /* ---- segmented toggles (side / mode B view) ------------------------------ */
 .seg-toggle {

@@ -19,6 +19,19 @@ the proximal humerus over the years? — but nothing in the tool is humerus-only
 
 > Research tool, not a diagnostic. Every output is de-identified.
 
+**One control up top — `Colour by`:**
+
+- **Thickness (wall map)** — the green→red cortical-thickness map, **in mm**. This
+  *is* the paper's method (Guo et al. 2022) and is the **default** — the app opens on
+  it, so reproducing the paper needs no setup: load a bone, read the wall thickness.
+- **Difference (compare 2)** — register two anchored surfaces and colour by the signed
+  gap (red = bone gained, green = lost). This is a **3Dorth extension**, *not* in the
+  paper — use it to compare Left↔Right or a baseline↔follow-up.
+
+Everything else (which side/series is shown, what two scans are being compared) is
+labelled on-screen: a banner over the 3D view, the legend title, and the slice panels
+all name the exact **series · side**.
+
 ## What you get
 
 ![3Dorth React UI — cortical thickness of a proximal humerus, with the side
@@ -153,6 +166,34 @@ Every image panel is labelled **array-oriented** (the app frame is
 `world = index × spacing + offset`, identity direction — the DICOM origin/direction
 are not carried through), so it never claims a radiological A/P/S/I orientation, and
 the research / de-identified / not-for-diagnosis caveat stays visible.
+
+## Run it on your own scans (local, bounded)
+
+To open the app on **your own** CT instead of the bundled demo — without committing
+anything patient-identifying — drop the scans under `./data/raw/` (already
+`.gitignore`d) and run:
+
+```bash
+# auto-discovers the scans under data/raw/ (bounded so it never maxes out RAM/VRAM)
+scripts/run_local_example.sh
+# …or point it explicitly (a DICOM dir, a .zip, or a .nii/.nii.gz):
+scripts/run_local_example.sh /path/to/scanA /path/to/scanB   # 2nd arg optional
+# then open http://localhost:8000
+```
+
+Under the hood it sets `THREEDORTH_DEMO` (and optionally `THREEDORTH_DEMO_FOLLOWUP`)
+so the demo session loads your files, and caps the working-voxel budget /
+concurrency / threads. The served UI only ever shows the DICOM **SeriesDescription**
+and a PatientID **hash** — never a name — and your raw files stay out of git.
+
+**Comparing two files — pick the right comparison.** If your two files are two
+**reconstructions of the same scan session** (e.g. a *coronal reformat* + an *axial
+bone-kernel* series of one visit), a cross-series **Difference** map shows
+reconstruction/resampling noise, **not** real change. For those, load **one** series
+and use **`Colour by → Difference`** with **“L vs R within one scan”** to compare the
+two shoulders — or just read each side's **Thickness** map (the paper's method). A
+cross-series Difference is only meaningful between **genuinely different time points**
+(a real baseline vs a later follow-up).
 
 ## Get it running
 

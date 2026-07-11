@@ -275,10 +275,20 @@ export default function App() {
     setSession(sess);
     const sides = sess.sides || [];
     const series = sess.series || [];
-    setSide(sides[0] ?? null);
-    // Default the Show filter: a bilateral scan starts on Left, otherwise Auto.
+    // Default side + Show filter TOGETHER so the highlighted button and the
+    // actually-analysed side always agree on mount. A bilateral scan starts on
+    // Left (even if the raw side order lists Right first); otherwise the first
+    // side / Auto.
     const lr = new Set(sides.map(sideNameOf));
-    setShowFilter(lr.has('left') && lr.has('right') ? 'left' : 'auto');
+    const isBilat = lr.has('left') && lr.has('right');
+    if (isBilat) {
+      const leftKey = sides.find((k) => sideNameOf(k) === 'left') ?? sides[0];
+      setSide(leftKey ?? null);
+      setShowFilter('left');
+    } else {
+      setSide(sides[0] ?? null);
+      setShowFilter('auto');
+    }
     // Default comparison roles. With a single series, compare its two sides
     // (left vs right). With 2+ series, the STANDARD is to compare the SAME side
     // across series — anchoring each visit's LEFT to the others' left (the
@@ -1254,16 +1264,16 @@ export default function App() {
               <button
                 className={colourBy === 'thickness' ? 'active' : ''}
                 onClick={() => setColourBy('thickness')}
-                title="Colour each surface by its own cortical wall thickness (mm)"
+                title="Cortical wall-thickness map (mm), green→red. This is the paper's method (Guo et al. 2022) — the default."
               >
-                Thickness
+                Thickness <span className="mode-toggle-sub">wall map</span>
               </button>
               <button
                 className={colourBy === 'difference' ? 'active' : ''}
                 onClick={() => setColourBy('difference')}
-                title="Colour by the difference between two anchored surfaces (mm) — the comparison"
+                title="Signed surface difference between two anchored scans (mm), red=gained / green=lost. A project extension, not in the paper."
               >
-                Difference
+                Difference <span className="mode-toggle-sub">compare 2</span>
               </button>
             </div>
           )}
@@ -1511,6 +1521,12 @@ export default function App() {
           {displayGeometry && (() => {
             const inv = values?.signed_distance_sign === 'target_outside_negative';
             const ep = colormapEndpoints(values?.mode_b_colormap || 'green_white_red');
+            // Name the surface the coloured one is measured against (the reference),
+            // instead of the vague "the one under it".
+            const refUnder =
+              compareMode === 'group'
+                ? 'the other visit(s)'
+                : sideLabelOf(referenceSide, session?.series);
             let title;
             let sub;
             if (!isDeviationView) {
@@ -1539,9 +1555,9 @@ export default function App() {
                 {isDeviationView && (
                   <div className="view-banner-key">
                     <span className="vb-chip" style={{ background: ep.high }} />
-                    <span>{inv ? 'deficit' : 'excess'} — this surface sits <b>{inv ? 'inside' : 'outside'}</b> the one under it</span>
+                    <span>{inv ? 'deficit' : 'excess'} — this surface sits <b>{inv ? 'inside' : 'outside'}</b> {refUnder}</span>
                     <span className="vb-chip" style={{ background: ep.low }} />
-                    <span>{inv ? 'excess' : 'deficit'} — this surface sits <b>{inv ? 'outside' : 'inside'}</b> the one under it</span>
+                    <span>{inv ? 'excess' : 'deficit'} — this surface sits <b>{inv ? 'outside' : 'inside'}</b> {refUnder}</span>
                   </div>
                 )}
               </div>
@@ -1662,7 +1678,7 @@ export default function App() {
                   reverse={displayGeometry.reverse}
                   colormap={displayGeometry.colormap}
                   title={`Cortical thickness (mm) — ${
-                    isBoth ? 'Left + Right' : cap(side)
+                    isBoth ? 'Left + Right' : sideLabelOf(effectiveSide, session?.series)
                   }`}
                 />
               </DraggablePanel>
@@ -1807,12 +1823,18 @@ export default function App() {
           {centerView === 'images' && (
             <div className="mpr-column">
               {mprSide ? (
+                <>
+                <div className="mpr-slicing-label">
+                  Slicing: <strong>{sideLabelOf(mprSide, session?.series)}</strong>
+                  {isDeviationView ? ' (reference volume)' : ''}
+                </div>
                 <MPRViewer
                   sessionId={session.session_id}
                   side={mprSide}
                   externalCrosshair={pickedCrosshair}
                   onCrosshairChange={onMprCrosshair}
                 />
+                </>
               ) : (
                 <div className="mpr-wrap mpr-empty">
                   <div className="mpr-empty-title">No volume to slice</div>
@@ -1828,6 +1850,13 @@ export default function App() {
           {centerView === 'oblique' && (
             <div className="mpr-column">
               {mprSide ? (
+                <>
+                <div className="mpr-slicing-label">
+                  Slicing: <strong>{sideLabelOf(mprSide, session?.series)}</strong>
+                  {isDeviationView && canCompareSides
+                    ? ' — matched reference ↔ target cross-sections'
+                    : isDeviationView ? ' (reference volume)' : ''}
+                </div>
                 <ObliqueView
                   sessionId={session.session_id}
                   side={mprSide}
@@ -1844,6 +1873,7 @@ export default function App() {
                   params={values}
                   manualTransform={manualTransform}
                 />
+                </>
               ) : (
                 <div className="mpr-wrap mpr-empty">
                   <div className="mpr-empty-title">No volume to slice</div>
